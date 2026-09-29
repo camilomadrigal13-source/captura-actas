@@ -62,8 +62,8 @@ function render(){
 
 async function renderHome(){
   const v = $('#view');
-  if (!S.reuniones.length){ v.innerHTML = `<div class="empty"><b>Aún no hay reuniones</b>Toca <strong>+ Nueva</strong> al llegar a la reunión. Luego captura fotos, videos, grabaciones y notas dictadas. Todo se guarda en este celular, aunque no haya señal.</div>`; return; }
-  v.innerHTML = `<p class="eyebrow">Reuniones</p><ul class="list">${S.reuniones.map(r => `<li><button class="card mtg" data-open="${r.id}">
+  if (!S.reuniones.length){ v.innerHTML = installCard() + `<div class="empty"><b>Aún no hay reuniones</b>Toca <strong>+ Nueva</strong> al llegar a la reunión. Luego captura fotos, videos, grabaciones y notas dictadas. Todo se guarda en este celular, aunque no haya señal.</div>`; return; }
+  v.innerHTML = installCard() + `<p class="eyebrow">Reuniones</p><ul class="list">${S.reuniones.map(r => `<li><button class="card mtg" data-open="${r.id}">
     <span class="row"><b>${esc(r.titulo)}</b>${r.pendienteEnvio ? '<span class="chip warn">En cola</span>' : r.enviada ? '<span class="chip ok">Enviada</span>' : ''}</span>
     <span class="sub">${esc([r.tipo, r.proyecto].filter(Boolean).join(' · '))}</span>
     <span class="sub mono">${esc(fFecha(r.fecha))}${r.lugar ? ' · ' + esc(r.lugar) : ''}</span></button></li>`).join('')}</ul><p class="meter" id="meter"></p>`;
@@ -190,11 +190,10 @@ function openNota(it){
   $('#nota-h').textContent = !it ? 'Nueva nota' : isNote ? 'Editar nota' : 'Comentario';
   $('#nota-lbl').textContent = isNote ? 'Toca Dictar y habla, o escribe' : 'Qué muestra (ej.: fisura en muro eje 3)';
   $('#n-texto').value = it ? (it.texto || '') : '';
-  $('#dictar-msg').hidden = true;
-  $('#btn-dictar').hidden = !SR;
+  dMsg('');
   $('#sh-nota').hidden = false;
   if (!it && !rec){
-    if (SR && navigator.onLine) startDictado();
+    if (navigator.onLine) startDictado();
     else startNotaVoz();
   } else setTimeout(() => $('#n-texto').focus(), 60);
 }
@@ -223,24 +222,44 @@ async function stopNotaVoz(save){
   if (!save || !v.parts.length) return null;
   return {blob: new Blob(v.parts, {type: v.mime}), mime: v.mime, dur: (Date.now() - v.t0) / 1000};
 }
+/* dictado: sesiones cortas que se reinician solas (más estable en Android). Si falla, pasa a nota de voz. */
+const LANGS = ['es-CO', 'es-419', 'es-ES'];
+const ERRTXT = {'not-allowed':'El celular no dio permiso de micrófono para dictar.', 'service-not-allowed':'El servicio de voz de Google está desactivado en este celular.', 'network':'No hay internet para dictar.', 'audio-capture':'El micrófono está ocupado.', 'language-not-supported':'El dictado en español no está disponible.'};
+function dMsg(t, warn){ const m = $('#dictar-msg'); m.textContent = t; m.hidden = !t; m.style.color = warn ? 'var(--danger)' : ''; }
 function startDictado(){
-  if (!SR) return;
   const ta = $('#n-texto');
-  const d = {r: new SR(), base: ta.value ? ta.value.replace(/\s*$/, ' ') : '', ses: '', on: true};
-  d.r.lang = 'es-CO'; d.r.continuous = true; d.r.interimResults = true;
-  d.r.onresult = e => { let t = ''; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript; d.ses = t; ta.value = d.base + t; ta.scrollTop = ta.scrollHeight; };
-  d.r.onerror = e => {
-    if (e.error === 'network' && !rec){ d.on = false; setTimeout(() => { stopDictado(); startNotaVoz(); }, 0); return; }
-    const m = {'not-allowed':'Sin permiso de micrófono.', 'audio-capture': rec ? 'El micrófono está ocupado por la grabación. Escribe la nota; la grabación ya está captando lo que se dice.' : 'No se detecta micrófono.'}[e.error];
-    if (m){ d.on = false; $('#dictar-msg').textContent = m; $('#dictar-msg').hidden = false; }
+  if (!SR){ dMsg('Este navegador no tiene dictado (ábrela en Chrome). Se graba como nota de voz.', true); if (!rec) startNotaVoz(); return; }
+  const d = {base: ta.value ? ta.value.replace(/\s*$/, ' ') : '', on: true, li: 0, err: null, quick: 0, t0: 0};
+  const run = () => {
+    const r = new SR(); d.r = r; d.t0 = Date.now();
+    r.lang = LANGS[d.li]; r.continuous = false; r.interimResults = true; r.maxAlternatives = 1;
+    r.onstart = () => dMsg('Escuchando… habla ahora.');
+    r.onresult = e => {
+      let fin = '', inter = '';
+      for (let i = e.resultIndex; i < e.results.length; i++){ const t = e.results[i][0].transcript; if (e.results[i].isFinal) fin += t; else inter += t; }
+      if (fin.trim()){ d.base += fin.trim() + ' '; d.got = true; }
+      ta.value = d.base + inter; ta.scrollTop = ta.scrollHeight; d.quick = 0;
+    };
+    r.onerror = e => { d.err = e.error; };
+    r.onend = () => {
+      if (dict !== d) return;
+      const err = d.err; d.err = null;
+      d.quick = Date.now() - d.t0 < 1500 ? d.quick + 1 : 0;
+      if (err === 'language-not-supported' && d.li < LANGS.length - 1){ d.li++; return run(); }
+      if ((!err || err === 'no-speech' || err === 'aborted') && d.on && d.quick < 5){ try { return run(); } catch(_){} }
+      if (!err || err === 'no-speech' || err === 'aborted'){ if (d.quick >= 5 && !d.got){ stopDictado(); dMsg('El dictado no arrancó en este celular. Se graba como nota de voz.', true); if (!rec) startNotaVoz(); } else stopDictado(); return; }
+      stopDictado();
+      dMsg((ERRTXT[err] || 'El dictado falló (' + err + ').') + (rec ? ' La grabación de la reunión ya está captando lo que se dice; escribe la nota.' : ' Se graba como nota de voz y la transcribo al hacer el acta.'), true);
+      if (!rec) startNotaVoz();
+    };
+    r.start();
   };
-  d.r.onend = () => { d.base = (d.base + d.ses).replace(/\s*$/, ' '); d.ses = ''; if (d.on && dict === d){ try { d.r.start(); return; } catch(_){} } if (dict === d) stopDictado(); };
   dict = d;
-  try { d.r.start(); } catch(e){ dict = null; return; }
+  try { run(); } catch(e){ dict = null; dMsg('El dictado no arrancó. Se graba como nota de voz.', true); if (!rec) startNotaVoz(); return; }
   $('#btn-dictar').classList.add('on'); $('#btn-dictar').textContent = '■ Detener dictado';
 }
-function stopDictado(){ const d = dict; dict = null; if (d){ d.on = false; try { d.r.stop(); } catch(_){} } $('#btn-dictar').classList.remove('on'); $('#btn-dictar').textContent = '● Dictar'; }
-$('#btn-dictar').onclick = () => dict ? stopDictado() : startDictado();
+function stopDictado(){ const d = dict; dict = null; if (d){ d.on = false; try { d.r.stop(); } catch(_){} } $('#btn-dictar').classList.remove('on'); $('#btn-dictar').textContent = '● Dictar'; if (d && !$('#dictar-msg').style.color) dMsg(''); }
+$('#btn-dictar').onclick = () => dict ? stopDictado() : vn ? toast('Ya se está grabando la nota de voz.') : startDictado();
 $('#f-nota').addEventListener('submit', async e => {
   e.preventDefault(); stopDictado();
   const texto = $('#n-texto').value.trim();
@@ -348,6 +367,23 @@ $('#banner-btn').onclick = async () => {
 };
 window.addEventListener('online', () => { updateNet(); if (S.reuniones.some(r => r.pendienteEnvio)){ toast('Volvió la señal. Toca «Enviar ahora» para mandar lo que quedó en cola.'); navigator.vibrate?.(200); } });
 window.addEventListener('offline', () => { updateNet(); if (dict){ stopDictado(); startNotaVoz(); } });
+
+/* ---------- instalar como app ---------- */
+let bip = null;
+const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const inApp = /; wv\)|FBAN|FBAV|Instagram|WhatsApp|Line\//i.test(navigator.userAgent);
+const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+function installCard(){
+  if (standalone()) return '';
+  const how = inApp ? 'Estás dentro de otra app. Toca <strong>⋮ → Abrir en Chrome</strong> (o copia el enlace en Chrome) para instalarla y dictar.'
+    : isIOS ? 'En Safari toca <strong>Compartir</strong> y luego <strong>Agregar a inicio</strong>.'
+    : bip ? 'Queda con su ícono en el celular, abre a pantalla completa y funciona sin señal.'
+    : 'En Chrome toca <strong>⋮</strong> y luego <strong>Instalar app</strong> (o «Agregar a pantalla principal»).';
+  return `<div class="card install"><b>Instala Actas como app</b><span class="sub">${how}</span>${bip && !inApp ? '<button class="btn primary" id="btn-install">Instalar app</button>' : ''}</div>`;
+}
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); bip = e; if (S.view === 'home') renderHome(); });
+window.addEventListener('appinstalled', () => { bip = null; toast('App instalada. Ábrela desde el ícono «Actas».'); if (S.view === 'home') renderHome(); });
+document.addEventListener('click', async e => { if (e.target.id === 'btn-install' && bip){ bip.prompt(); try { await bip.userChoice; } catch(_){} bip = null; renderHome(); } });
 
 /* ---------- arranque ---------- */
 window.addEventListener('beforeunload', e => { if (rec){ e.preventDefault(); e.returnValue = ''; } });
