@@ -62,11 +62,14 @@ function render(){
 
 async function renderHome(){
   const v = $('#view');
-  if (!S.reuniones.length){ v.innerHTML = installCard() + `<div class="empty"><b>Aún no hay reuniones</b>Toca <strong>+ Nueva</strong> al llegar a la reunión. Luego captura fotos, videos, grabaciones y notas dictadas. Todo se guarda en este celular, aunque no haya señal.</div>`; return; }
-  v.innerHTML = installCard() + `<p class="eyebrow">Reuniones</p><ul class="list">${S.reuniones.map(r => `<li><button class="card mtg" data-open="${r.id}">
-    <span class="row"><b>${esc(r.titulo)}</b>${r.pendienteEnvio ? '<span class="chip warn">En cola</span>' : r.enviada ? '<span class="chip ok">Enviada</span>' : ''}</span>
+  const imp = `<div class="row" style="justify-content:flex-end;margin-bottom:10px"><button class="btn ghost" id="btn-import">Importar registro (.zip)</button></div>`;
+  if (!S.reuniones.length){ v.innerHTML = installCard() + imp + `<div class="empty"><b>Aún no hay reuniones</b>Toca <strong>+ Nueva</strong> al llegar a la reunión. Luego captura fotos, videos, grabaciones y notas dictadas. Todo se guarda en este celular, aunque no haya señal.</div>`; $('#btn-import').onclick = pick('#in-import'); return; }
+  v.innerHTML = installCard() + imp + `<p class="eyebrow">Reuniones</p><ul class="list">${S.reuniones.map(r => `<li class="card mtgbox"><button class="mtg" data-open="${r.id}">
+    <span class="row"><b>${esc(r.titulo)}</b>${r.pendienteIA ? '<span class="chip warn">IA en cola</span>' : r.enviadaIA ? '<span class="chip ok">Enviada a IA</span>' : ''}</span>
     <span class="sub">${esc([r.tipo, r.proyecto].filter(Boolean).join(' · '))}</span>
-    <span class="sub mono">${esc(fFecha(r.fecha))}${r.lugar ? ' · ' + esc(r.lugar) : ''}</span></button></li>`).join('')}</ul><p class="meter" id="meter"></p>`;
+    <span class="sub mono">${esc(fFecha(r.fecha))}${r.lugar ? ' · ' + esc(r.lugar) : ''}</span></button>
+    <div class="mtg-acts"><button class="btn ghost" data-exp="${r.id}">Exportar</button><button class="btn ghost danger" data-delr="${r.id}">Eliminar</button></div></li>`).join('')}</ul><p class="meter" id="meter"></p>`;
+  $('#btn-import').onclick = pick('#in-import');
   try { const e = await navigator.storage?.estimate?.(); if (e && $('#meter')) $('#meter').textContent = `Espacio usado en el celular: ${fMB(e.usage || 0)}`; } catch(_){}
 }
 
@@ -74,25 +77,30 @@ function renderMeeting(){
   const r = S.cur, v = $('#view');
   const asis = (r.asistentes || '').split('\n').map(s => s.trim()).filter(Boolean);
   const n = S.items.length;
+  const sinTitulo = S.items.filter(i => (i.tipo === 'foto' || i.tipo === 'video') && !i.titulo).length;
   v.innerHTML = `<section class="meta card">
     <h2>${esc(r.titulo)}</h2>
     <div class="sub">${esc([r.tipo, r.proyecto].filter(Boolean).join(' · '))}</div>
     <div class="sub mono">${esc(fFecha(r.fecha))}${r.lugar ? ' · ' + esc(r.lugar) : ''}</div>
     ${asis.length ? `<details><summary>${asis.length} asistente${asis.length > 1 ? 's' : ''}</summary><ul>${asis.map(a => `<li>${esc(a)}</li>`).join('')}</ul></details>` : `<div class="sub" style="margin-top:8px">Sin asistentes. Tip: toma foto a la lista de asistencia firmada.</div>`}
-    <div class="actions"><button class="btn primary" id="btn-enviar" ${n ? '' : 'disabled'}>Enviar para acta</button><span class="chip" style="align-self:center">${n} elemento${n === 1 ? '' : 's'}</span></div>
-    ${r.pendienteEnvio ? `<p class="small" style="margin:10px 0 0">En cola desde ${esc(fFecha(r.pendienteEnvio))}: se envía cuando haya internet.</p>` : ''}
-    ${r.enviada && !r.pendienteEnvio ? `<p class="small" style="margin:10px 0 0">Enviada el ${esc(fFecha(r.enviada))}. En el PC pídele a Claude: «Haz el acta de ${esc(r.titulo)}».</p>` : ''}
+    <div class="actions"><button class="btn primary" id="btn-ia" ${n ? '' : 'disabled'}>Redactar acta con IA</button><button class="btn" id="btn-enviar" ${n ? '' : 'disabled'}>Exportar ZIP</button><span class="chip" style="align-self:center">${n} elemento${n === 1 ? '' : 's'}</span></div>
+    ${sinTitulo ? `<p class="small warnline">${sinTitulo} foto${sinTitulo > 1 ? 's' : ''} sin título. Toca «Agregar título» en cada una.</p>` : ''}
+    ${r.pendienteIA ? `<p class="small" style="margin:10px 0 0">En cola desde ${esc(fFecha(r.pendienteIA))}: se prepara para la IA cuando haya internet.</p>` : ''}
+    ${r.enviadaIA && !r.pendienteIA ? `<p class="small" style="margin:10px 0 0">Preparada para IA el ${esc(fFecha(r.enviadaIA))}.</p>` : ''}
   </section>
   ${n ? `<ol class="timeline">${S.items.map(itemHTML).join('')}</ol>` : `<div class="empty"><b>Nada capturado todavía</b>Usa los botones de abajo. Todo queda en orden de captura.</div>`}`;
-  $('#btn-enviar').onclick = exportar;
+  $('#btn-enviar').onclick = () => exportar(S.cur, S.items);
+  $('#btn-ia').onclick = redactarIA;
 }
 
 function itemHTML(it){
   let inner = '';
+  const visual = it.tipo === 'foto' || it.tipo === 'video';
+  if (visual) inner = it.titulo ? `<div class="ttl">${esc(it.titulo)}</div>` : `<button class="ttl none" data-act="titulo">Sin título · toca para agregar</button>`;
   if (it.tipo === 'nota') inner = `<div class="note">${esc(it.texto)}</div>`;
   else {
     const u = urlFor(it);
-    inner = it.tipo === 'foto' ? `<img src="${u}" alt="${esc(it.texto || 'Foto')}" loading="lazy">`
+    inner += it.tipo === 'foto' ? `<img src="${u}" alt="${esc(it.titulo || 'Foto')}" loading="lazy">`
       : it.tipo === 'video' ? `<video src="${u}" controls playsinline preload="metadata"></video>`
       : it.tipo === 'audio' ? `<audio src="${u}" controls preload="metadata"></audio>`
       : `<div class="note">${esc(it.nombre)}</div>`;
@@ -100,7 +108,7 @@ function itemHTML(it){
   }
   const info = [it.notaVoz ? 'Nota de voz · por transcribir' : LABEL[it.tipo], it.dur ? fDur(it.dur) : '', it.blob ? fMB(it.blob.size) : ''].filter(Boolean).join(' · ');
   return `<li class="it" data-id="${it.id}"><div class="t mono">${fHora(it.creado)}</div><div class="body">${inner}
-    <div class="foot"><span class="k">${info}</span><button data-act="comment">${it.tipo === 'nota' ? 'Editar' : it.texto ? 'Editar comentario' : 'Comentar'}</button><button class="del" data-act="delete">Eliminar</button></div></div></li>`;
+    <div class="foot"><span class="k">${info}</span><button data-act="${visual ? 'titulo' : 'comment'}">${visual ? (it.titulo ? 'Editar título' : 'Agregar título') : it.tipo === 'nota' ? 'Editar' : it.texto ? 'Editar comentario' : 'Comentar'}</button><button class="del" data-act="delete">Eliminar</button></div></div></li>`;
 }
 
 /* ---------- navegación ---------- */
@@ -120,13 +128,44 @@ async function compressImage(file){
   } catch(e){ return file; }
 }
 async function addFiles(list){
+  const nuevos = [];
   for (const f of list){
     const mime = mimeOf(f); let blob = f;
     if (mime.startsWith('image/')) blob = await compressImage(f);
-    await idb.put('items', {id: uid(), rid: S.cur.id, tipo: kindOf(mime), creado: Date.now(), nombre: f.name, mime: blob.type || mime, blob, texto: ''});
+    const it = {id: uid(), rid: S.cur.id, tipo: kindOf(mime), creado: Date.now(), nombre: f.name, mime: blob.type || mime, blob, titulo: '', texto: ''};
+    await idb.put('items', it); nuevos.push(it);
   }
   await refresh(true);
+  colaTitulos = nuevos.filter(i => i.tipo === 'foto' || i.tipo === 'video');
+  siguienteTitulo();
 }
+
+/* ---------- título de cada foto (qué muestra) ---------- */
+let colaTitulos = [], fotoItem = null;
+function siguienteTitulo(){ const it = colaTitulos.shift(); if (it) openFoto(it); }
+function openFoto(it){
+  fotoItem = it;
+  $('#foto-h').textContent = it.tipo === 'video' ? '¿Qué muestra este video?' : '¿Qué muestra esta foto?';
+  const pv = $('#foto-prev'); pv.hidden = it.tipo !== 'foto'; if (it.tipo === 'foto') pv.src = urlFor(it);
+  $('#fo-titulo').value = it.titulo || ''; $('#fo-desc').value = it.texto || '';
+  $('#foto-msg').hidden = true; $('#fo-skip').textContent = colaTitulos.length ? 'Después' : 'Después';
+  $('#sh-foto').hidden = false; setTimeout(() => $('#fo-titulo').focus(), 80);
+}
+let fotoCampo = null;
+['#fo-titulo', '#fo-desc'].forEach(id => $(id).addEventListener('focus', e => { fotoCampo = e.target; }));
+$('#btn-dictar-foto').onclick = () => {
+  if (dict) return stopDictado();
+  startDictado({ta: fotoCampo || $('#fo-titulo'), btn: $('#btn-dictar-foto'), msg: $('#foto-msg'), soloTexto: true});
+};
+$('#f-foto').addEventListener('submit', async e => {
+  e.preventDefault(); stopDictado();
+  const titulo = $('#fo-titulo').value.trim();
+  if (!titulo){ $('#foto-msg').textContent = 'Escribe o dicta un título corto: sirve para saber de qué trata la foto en el acta.'; $('#foto-msg').hidden = false; return $('#fo-titulo').focus(); }
+  fotoItem.titulo = titulo; fotoItem.texto = $('#fo-desc').value.trim();
+  await idb.put('items', fotoItem);
+  $('#sh-foto').hidden = true; fotoItem = null; await refresh(); siguienteTitulo();
+});
+$('#fo-skip').onclick = async () => { stopDictado(); $('#sh-foto').hidden = true; fotoItem = null; await refresh(); siguienteTitulo(); };
 const pick = id => () => { const i = $(id); i.value = ''; i.click(); };
 $('#c-foto').onclick = pick('#in-foto'); $('#c-video').onclick = pick('#in-video'); $('#c-archivo').onclick = pick('#in-archivo');
 ['#in-foto','#in-video','#in-archivo'].forEach(id => $(id).addEventListener('change', e => { if (e.target.files.length) addFiles([...e.target.files]); }));
@@ -190,10 +229,10 @@ function openNota(it){
   $('#nota-h').textContent = !it ? 'Nueva nota' : isNote ? 'Editar nota' : 'Comentario';
   $('#nota-lbl').textContent = isNote ? 'Toca Dictar y habla, o escribe' : 'Qué muestra (ej.: fisura en muro eje 3)';
   $('#n-texto').value = it ? (it.texto || '') : '';
-  dMsg('');
+  dCtx = ctxNota(); dMsg('');
   $('#sh-nota').hidden = false;
   if (!it && !rec){
-    if (navigator.onLine) startDictado();
+    if (navigator.onLine) startDictado(ctxNota());
     else startNotaVoz();
   } else setTimeout(() => $('#n-texto').focus(), 60);
 }
@@ -225,10 +264,15 @@ async function stopNotaVoz(save){
 /* dictado: sesiones cortas que se reinician solas (más estable en Android). Si falla, pasa a nota de voz. */
 const LANGS = ['es-CO', 'es-419', 'es-ES'];
 const ERRTXT = {'not-allowed':'El celular no dio permiso de micrófono para dictar.', 'service-not-allowed':'El servicio de voz de Google está desactivado en este celular.', 'network':'No hay internet para dictar.', 'audio-capture':'El micrófono está ocupado.', 'language-not-supported':'El dictado en español no está disponible.'};
-function dMsg(t, warn){ const m = $('#dictar-msg'); m.textContent = t; m.hidden = !t; m.style.color = warn ? 'var(--danger)' : ''; }
-function startDictado(){
-  const ta = $('#n-texto');
-  if (!SR){ dMsg('Este navegador no tiene dictado (ábrela en Chrome). Se graba como nota de voz.', true); if (!rec) startNotaVoz(); return; }
+let dCtx = null;
+const ctxNota = () => ({ta: $('#n-texto'), btn: $('#btn-dictar'), msg: $('#dictar-msg'), soloTexto: false});
+function dMsg(t, warn){ const m = (dCtx || ctxNota()).msg; m.textContent = t; m.hidden = !t; m.style.color = warn ? 'var(--danger)' : ''; }
+function startDictado(ctx){
+  dCtx = ctx || ctxNota();
+  const ta = dCtx.ta, solo = dCtx.soloTexto;
+  const fallback = () => { if (!solo) startNotaVoz(); };
+  const sufijo = solo ? ' Escríbelo con el teclado.' : null;
+  if (!SR){ dMsg('Este navegador no tiene dictado (ábrela en Chrome).' + (sufijo || ' Se graba como nota de voz.'), true); if (!rec) fallback(); return; }
   const d = {base: ta.value ? ta.value.replace(/\s*$/, ' ') : '', on: true, li: 0, err: null, quick: 0, t0: 0};
   const run = () => {
     const r = new SR(); d.r = r; d.t0 = Date.now();
@@ -247,19 +291,19 @@ function startDictado(){
       d.quick = Date.now() - d.t0 < 1500 ? d.quick + 1 : 0;
       if (err === 'language-not-supported' && d.li < LANGS.length - 1){ d.li++; return run(); }
       if ((!err || err === 'no-speech' || err === 'aborted') && d.on && d.quick < 5){ try { return run(); } catch(_){} }
-      if (!err || err === 'no-speech' || err === 'aborted'){ if (d.quick >= 5 && !d.got){ stopDictado(); dMsg('El dictado no arrancó en este celular. Se graba como nota de voz.', true); if (!rec) startNotaVoz(); } else stopDictado(); return; }
+      if (!err || err === 'no-speech' || err === 'aborted'){ if (d.quick >= 5 && !d.got){ stopDictado(); dMsg('El dictado no arrancó en este celular.' + (sufijo || ' Se graba como nota de voz.'), true); if (!rec) fallback(); } else stopDictado(); return; }
       stopDictado();
-      dMsg((ERRTXT[err] || 'El dictado falló (' + err + ').') + (rec ? ' La grabación de la reunión ya está captando lo que se dice; escribe la nota.' : ' Se graba como nota de voz y la transcribo al hacer el acta.'), true);
-      if (!rec) startNotaVoz();
+      dMsg((ERRTXT[err] || 'El dictado falló (' + err + ').') + (sufijo || (rec ? ' La grabación de la reunión ya está captando lo que se dice; escribe la nota.' : ' Se graba como nota de voz y la transcribo al hacer el acta.')), true);
+      if (!rec) fallback();
     };
     r.start();
   };
   dict = d;
-  try { run(); } catch(e){ dict = null; dMsg('El dictado no arrancó. Se graba como nota de voz.', true); if (!rec) startNotaVoz(); return; }
-  $('#btn-dictar').classList.add('on'); $('#btn-dictar').textContent = '■ Detener dictado';
+  try { run(); } catch(e){ dict = null; dMsg('El dictado no arrancó.' + (sufijo || ' Se graba como nota de voz.'), true); if (!rec) fallback(); return; }
+  dCtx.btn.classList.add('on'); dCtx.btn.textContent = '■ Detener';
 }
-function stopDictado(){ const d = dict; dict = null; if (d){ d.on = false; try { d.r.stop(); } catch(_){} } $('#btn-dictar').classList.remove('on'); $('#btn-dictar').textContent = '● Dictar'; if (d && !$('#dictar-msg').style.color) dMsg(''); }
-$('#btn-dictar').onclick = () => dict ? stopDictado() : vn ? toast('Ya se está grabando la nota de voz.') : startDictado();
+function stopDictado(){ const d = dict; dict = null; if (d){ d.on = false; try { d.r.stop(); } catch(_){} } const c = dCtx || ctxNota(); c.btn.classList.remove('on'); c.btn.textContent = '● Dictar'; if (d && !c.msg.style.color) dMsg(''); }
+$('#btn-dictar').onclick = () => dict ? stopDictado() : vn ? toast('Ya se está grabando la nota de voz.') : startDictado(ctxNota());
 $('#f-nota').addEventListener('submit', async e => {
   e.preventDefault(); stopDictado();
   const texto = $('#n-texto').value.trim();
@@ -304,40 +348,51 @@ $('#cf-ok').onclick = async () => { const fn = confirmFn; closeSheets(); if (fn)
 
 $('#view').addEventListener('click', e => {
   const o = e.target.closest('[data-open]'); if (o) return openMeeting(o.dataset.open);
+  const ex = e.target.closest('[data-exp]'); if (ex) return exportarId(ex.dataset.exp, ex);
+  const dr = e.target.closest('[data-delr]');
+  if (dr){ const r = S.reuniones.find(x => x.id === dr.dataset.delr); if (!r) return;
+    return confirmar(`¿Eliminar «${r.titulo}»?`, 'Se borran la reunión y todo lo capturado (fotos, audios, notas) de este celular. Si quieres conservarla, primero toca «Exportar».', 'Eliminar', async () => {
+      for (const it of await idb.by('items', 'rid', r.id)){ await idb.delBy('trozos', 'iid', it.id); await idb.del('items', it.id); }
+      await idb.del('reuniones', r.id); await loadReuniones(); renderHome(); updateNet(); toast('Reunión eliminada.');
+    }); }
   const a = e.target.closest('[data-act]'); if (!a) return;
   const it = S.items.find(x => x.id === a.closest('[data-id]').dataset.id); if (!it) return;
   if (a.dataset.act === 'comment') openNota(it);
+  else if (a.dataset.act === 'titulo'){ colaTitulos = []; openFoto(it); }
   else confirmar('¿Eliminar este elemento?', 'Se borra del celular y no se puede recuperar.', 'Eliminar', async () => {
     await idb.del('items', it.id); if (urls.has(it.id)){ URL.revokeObjectURL(urls.get(it.id)); urls.delete(it.id); } await refresh();
   });
 });
 
-/* ---------- enviar: paquete ZIP para Claude ---------- */
-async function exportar(){
-  if (rec) return toast('Detén la grabación antes de enviar.');
-  if (!navigator.onLine){
-    S.cur.pendienteEnvio = Date.now(); await idb.put('reuniones', S.cur); await loadReuniones();
-    renderMeeting(); updateNet();
-    return toast('Sin internet: la reunión queda en cola. Cuando vuelva la señal te aparece el botón «Enviar ahora».');
-  }
-  const btn = $('#btn-enviar'); btn.disabled = true; btn.textContent = 'Preparando…';
+function descargar(file){ const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
+const asistList = r => (r.asistentes || '').split('\n').map(s => s.trim()).filter(Boolean);
+const nombreBase = r => `acta_${new Date(r.fecha).toISOString().slice(0, 10)}_${slug(r.titulo)}`;
+
+/* ---------- exportar: ZIP completo (respaldo, pasar a otro celular o a Drive) ---------- */
+async function exportarId(id, btn){
+  const r = S.reuniones.find(x => x.id === id); if (!r) return;
+  const items = (await idb.by('items', 'rid', id)).sort((a, b) => a.creado - b.creado);
+  await exportar(r, items, btn);
+}
+async function exportar(r, items, btn){
+  if (rec) return toast('Detén la grabación antes de exportar.');
+  btn = btn || $('#btn-enviar'); const txt = btn.textContent; btn.disabled = true; btn.textContent = 'Preparando…';
   try {
-    const r = S.cur, zip = new JSZip();
-    const d = new Date(r.fecha), fecha = d.toISOString().slice(0, 10);
-    const carpeta = `acta_${fecha}_${slug(r.titulo)}`;
+    const zip = new JSZip(), carpeta = nombreBase(r);
     const f = zip.folder(carpeta), medios = f.folder('medios');
     const lineas = [], elementos = [];
     let k = 0;
-    for (const it of S.items){
+    for (const it of items){
       k++;
       const hora = fHora(it.creado), hh = new Date(it.creado).toTimeString().slice(0, 8).replace(/:/g, '');
       let archivo = null;
       if (it.blob){ const ext = EXT[baseMime(it.mime)] || (it.nombre?.split('.').pop()) || 'bin'; archivo = `medios/${String(k).padStart(3, '0')}_${hh}_${it.tipo}.${ext}`; medios.file(archivo.slice(7), it.blob); }
-      elementos.push({n: k, hora, momento: new Date(it.creado).toISOString(), tipo: it.notaVoz ? 'nota_de_voz' : it.tipo, transcribir: it.tipo === 'audio' || undefined, archivo, duracion_s: it.dur ? Math.round(it.dur) : undefined, texto: it.texto || ''});
-      lineas.push(`### ${k}. ${hora} — ${it.notaVoz ? 'Nota de voz (transcribir)' : it.tipo === 'audio' ? 'Grabación (transcribir)' : LABEL[it.tipo]}${it.dur ? ' (' + fDur(it.dur) + ')' : ''}` + (archivo ? `\nArchivo: ${archivo}` : '') + (it.texto ? `\n\n${it.texto}` : '') + '\n');
+      elementos.push({n: k, hora, momento: new Date(it.creado).toISOString(), tipo: it.notaVoz ? 'nota_de_voz' : it.tipo, transcribir: it.tipo === 'audio' || undefined, archivo, mime: it.mime, duracion_s: it.dur ? Math.round(it.dur) : undefined, titulo: it.titulo || undefined, texto: it.texto || ''});
+      const tipoTxt = it.notaVoz ? 'Nota de voz (transcribir)' : it.tipo === 'audio' ? 'Grabación (transcribir)' : LABEL[it.tipo];
+      lineas.push(`### ${k}. ${hora} — ${tipoTxt}${it.titulo ? ': ' + it.titulo : ''}${it.dur ? ' (' + fDur(it.dur) + ')' : ''}` + (archivo ? `\nArchivo: ${archivo}` : '') + (it.texto ? `\n\n${it.texto}` : '') + '\n');
     }
-    const meta = {titulo: r.titulo, tipo: r.tipo, proyecto: r.proyecto, lugar: r.lugar, fecha: d.toISOString(), fecha_local: fFecha(r.fecha),
-      asistentes: (r.asistentes || '').split('\n').map(s => s.trim()).filter(Boolean), elementos};
+    const meta = {app: 'captura-actas', version: 2, titulo: r.titulo, tipo: r.tipo, proyecto: r.proyecto, lugar: r.lugar, fecha: new Date(r.fecha).toISOString(), fecha_local: fFecha(r.fecha),
+      asistentes: asistList(r), elementos};
     f.file('reunion.json', JSON.stringify(meta, null, 2));
     f.file('contenido.md', `# ${r.titulo}\n\n- Tipo: ${r.tipo}\n- Proyecto: ${r.proyecto || '—'}\n- Lugar: ${r.lugar || '—'}\n- Fecha: ${fFecha(r.fecha)}\n\n## Asistentes\n${meta.asistentes.map(a => '- ' + a).join('\n') || '—'}\n\n## Registro en orden de captura\n\n${lineas.join('\n')}`);
     const blob = await zip.generateAsync({type: 'blob', compression: 'STORE'});
@@ -345,28 +400,96 @@ async function exportar(){
     let shared = false;
     if (navigator.canShare && navigator.canShare({files: [file]})){
       try { await navigator.share({files: [file], title: r.titulo}); shared = true; }
-      catch(e){ if (e.name === 'AbortError'){ btn.disabled = false; btn.textContent = 'Enviar para acta'; return; } }
+      catch(e){ if (e.name === 'AbortError'){ btn.disabled = false; btn.textContent = txt; return; } }
     }
-    if (!shared){ const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); toast('Paquete descargado. Súbelo a tu carpeta de Drive «Actas».'); }
-    r.enviada = Date.now(); delete r.pendienteEnvio; await idb.put('reuniones', r); await loadReuniones(); S.cur = r; renderMeeting(); updateNet();
-  } catch(e){ toast('No se pudo preparar el paquete: ' + (e.message || e)); btn.disabled = false; btn.textContent = 'Enviar para acta'; }
+    if (!shared){ descargar(file); toast('Registro guardado en Descargas como ' + file.name); }
+  } catch(e){ toast('No se pudo exportar: ' + (e.message || e)); }
+  btn.disabled = false; btn.textContent = txt;
+}
+
+/* ---------- importar un ZIP exportado (otro celular, respaldo) ---------- */
+$('#in-import').addEventListener('change', async e => {
+  const file = e.target.files[0]; if (!file) return;
+  try {
+    const zip = await JSZip.loadAsync(file);
+    const jf = Object.keys(zip.files).find(n => n.endsWith('reunion.json')); if (!jf) throw new Error('el archivo no tiene reunion.json');
+    const base = jf.slice(0, -'reunion.json'.length), meta = JSON.parse(await zip.file(jf).async('string'));
+    const r = {id: uid(), creada: Date.now(), titulo: meta.titulo || 'Reunión importada', tipo: meta.tipo || TIPOS[0], fecha: new Date(meta.fecha).getTime() || Date.now(),
+      proyecto: meta.proyecto || '', lugar: meta.lugar || '', asistentes: (meta.asistentes || []).join('\n'), importada: Date.now()};
+    for (const el of meta.elementos || []){
+      const it = {id: uid(), rid: r.id, tipo: el.tipo === 'nota_de_voz' ? 'audio' : el.tipo, notaVoz: el.tipo === 'nota_de_voz' || undefined, creado: new Date(el.momento).getTime() || Date.now(), titulo: el.titulo || '', texto: el.texto || '', dur: el.duracion_s || undefined};
+      if (el.archivo && zip.file(base + el.archivo)){ const mime = el.mime || Object.keys(EXT).find(k => EXT[k] === el.archivo.split('.').pop()) || 'application/octet-stream'; it.blob = new Blob([await zip.file(base + el.archivo).async('arraybuffer')], {type: mime}); it.mime = mime; it.nombre = el.archivo.split('/').pop(); }
+      await idb.put('items', it);
+    }
+    await idb.put('reuniones', r); await loadReuniones(); renderHome(); toast(`Importada: «${r.titulo}».`);
+  } catch(err){ toast('No se pudo importar: ' + (err.message || err)); }
+});
+
+/* ---------- redactar con IA: paquete para el Redactor de Actas (Claude, plan Pro) ---------- */
+const REDACTOR_URL = 'https://claude.ai/artifact/HrW6fwFG1AfQb4tK9Y1Kxr';
+async function fotoIA(blob){
+  try {
+    const bmp = await createImageBitmap(blob);
+    const k = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.8).split(',')[1];
+  } catch(_){ return null; }
+}
+async function videoFrame(blob){
+  return new Promise(ok => {
+    const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = URL.createObjectURL(blob);
+    const done = x => { URL.revokeObjectURL(v.src); ok(x); };
+    v.onloadeddata = () => { v.currentTime = Math.min(1, (v.duration || 2) / 2); };
+    v.onseeked = () => { try { const k = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight)); const c = document.createElement('canvas'); c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k); c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); done(c.toDataURL('image/jpeg', 0.8).split(',')[1]); } catch(_){ done(null); } };
+    v.onerror = () => done(null); setTimeout(() => done(null), 8000);
+  });
+}
+async function redactarIA(){
+  if (rec) return toast('Detén la grabación antes de redactar el acta.');
+  const r = S.cur;
+  const faltan = S.items.filter(i => (i.tipo === 'foto' || i.tipo === 'video') && !i.titulo);
+  if (faltan.length){ colaTitulos = faltan.slice(1); openFoto(faltan[0]); return toast('Antes de redactar, ponle título a cada foto.'); }
+  if (!navigator.onLine){
+    r.pendienteIA = Date.now(); await idb.put('reuniones', r); await loadReuniones(); S.cur = S.reuniones.find(x => x.id === r.id); renderMeeting(); updateNet();
+    return toast('Sin internet: queda en cola. Cuando vuelva la señal aparece «Redactar ahora».');
+  }
+  const btn = $('#btn-ia'); btn.disabled = true; btn.textContent = 'Preparando…';
+  try {
+    const elementos = []; let k = 0;
+    for (const it of S.items){
+      k++;
+      const el = {n: k, hora: fHora(it.creado), tipo: it.notaVoz ? 'nota_de_voz' : it.tipo, titulo: it.titulo || undefined, texto: it.texto || '', duracion_s: it.dur ? Math.round(it.dur) : undefined};
+      if (it.tipo === 'foto' && it.blob) el.foto = await fotoIA(it.blob);
+      if (it.tipo === 'video' && it.blob) el.foto = await videoFrame(it.blob);
+      if (!el.foto) delete el.foto;
+      elementos.push(el);
+    }
+    const pkg = {app: 'captura-actas', version: 2, reunion: {titulo: r.titulo, tipo: r.tipo, proyecto: r.proyecto, lugar: r.lugar, fecha: new Date(r.fecha).toISOString(), asistentes: asistList(r)}, elementos};
+    const file = new File([JSON.stringify(pkg)], nombreBase(r) + '.json', {type: 'application/json'});
+    descargar(file);
+    delete r.pendienteIA; r.enviadaIA = Date.now(); await idb.put('reuniones', r); await loadReuniones(); S.cur = S.reuniones.find(x => x.id === r.id); renderMeeting(); updateNet();
+    $('#ia-file').textContent = file.name; $('#ia-audio').hidden = !S.items.some(i => i.tipo === 'audio');
+    $('#ia-open').href = REDACTOR_URL; $('#sh-ia').hidden = false;
+  } catch(e){ toast('No se pudo preparar: ' + (e.message || e)); }
+  const b = $('#btn-ia'); if (b){ b.disabled = false; b.textContent = 'Redactar acta con IA'; }
 }
 
 /* ---------- conexión y cola ---------- */
 function updateNet(){
   const on = navigator.onLine;
   $('#net').hidden = on;
-  const cola = S.reuniones.filter(r => r.pendienteEnvio);
+  const cola = S.reuniones.filter(r => r.pendienteIA);
   $('#banner').hidden = !(on && cola.length);
-  if (on && cola.length) $('#banner-txt').textContent = cola.length === 1 ? `Volvió la señal. «${cola[0].titulo}» está lista para enviar.` : `Volvió la señal. Tienes ${cola.length} reuniones en cola para enviar.`;
+  if (on && cola.length) $('#banner-txt').textContent = cola.length === 1 ? `Volvió la señal. «${cola[0].titulo}» está lista para redactar el acta.` : `Volvió la señal. Tienes ${cola.length} reuniones en cola para redactar.`;
 }
 $('#banner-btn').onclick = async () => {
-  const r = S.reuniones.find(x => x.pendienteEnvio); if (!r) return;
+  const r = S.reuniones.find(x => x.pendienteIA); if (!r) return;
   if (!S.cur || S.cur.id !== r.id) await openMeeting(r.id);
-  exportar();
+  redactarIA();
 };
-window.addEventListener('online', () => { updateNet(); if (S.reuniones.some(r => r.pendienteEnvio)){ toast('Volvió la señal. Toca «Enviar ahora» para mandar lo que quedó en cola.'); navigator.vibrate?.(200); } });
-window.addEventListener('offline', () => { updateNet(); if (dict){ stopDictado(); startNotaVoz(); } });
+window.addEventListener('online', () => { updateNet(); if (S.reuniones.some(r => r.pendienteIA)){ toast('Volvió la señal. Toca «Redactar ahora» para lo que quedó en cola.'); navigator.vibrate?.(200); } });
+window.addEventListener('offline', () => { updateNet(); if (dict){ const c = dCtx; stopDictado(); if (!c || !c.soloTexto) startNotaVoz(); } });
 
 /* ---------- instalar como app ---------- */
 let bip = null;

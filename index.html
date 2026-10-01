@@ -113,6 +113,16 @@ main{flex:1;padding:16px 16px calc(150px + env(safe-area-inset-bottom,0px))}
 .install{display:flex;flex-direction:column;gap:8px;margin-bottom:16px;border-color:var(--accent)}
 .install b{font:600 1.1rem var(--f-display)}
 .install .btn{align-self:flex-start}
+.ttl{display:block;width:100%;text-align:left;padding:10px 14px;font-weight:700;border:0;border-bottom:1px solid var(--line);background:var(--surface);color:var(--ink)}
+.ttl.none{color:var(--danger);font-weight:600;cursor:pointer}
+.mtgbox{display:flex;flex-direction:column;gap:8px;padding:0}
+.mtgbox .mtg{background:none;border:0;padding:14px 14px 0;color:inherit}
+.mtg-acts{display:flex;gap:6px;justify-content:flex-end;padding:0 8px 8px;border-top:1px solid var(--line);padding-top:6px}
+.mtg-acts .btn{padding:6px 10px;font-size:.85rem}
+.warnline{color:var(--danger);margin:10px 0 0}
+.prev{display:block;width:100%;max-height:34vh;object-fit:contain;background:#000;border-radius:8px;margin-bottom:12px}
+.steps{margin:0 0 10px;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:.95rem}
+a.btn{text-decoration:none}
 .toast{position:fixed;left:16px;right:16px;bottom:calc(150px + env(safe-area-inset-bottom,0px));z-index:30;max-width:560px;margin:0 auto;background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:8px;font-size:.9rem}
 </style>
 </head>
@@ -125,7 +135,7 @@ main{flex:1;padding:16px 16px calc(150px + env(safe-area-inset-bottom,0px))}
     <button class="btn primary" id="btn-new">+ Nueva</button>
     <button class="btn ghost" id="btn-edit" hidden>Editar</button>
   </header>
-  <div class="banner" id="banner" hidden><span id="banner-txt"></span><button class="btn primary" id="banner-btn">Enviar ahora</button></div>
+  <div class="banner" id="banner" hidden><span id="banner-txt"></span><button class="btn primary" id="banner-btn">Redactar ahora</button></div>
   <main id="view"></main>
 </div>
 
@@ -147,6 +157,31 @@ main{flex:1;padding:16px 16px calc(150px + env(safe-area-inset-bottom,0px))}
 <input type="file" id="in-foto" accept="image/*" capture="environment" hidden>
 <input type="file" id="in-video" accept="video/*" capture="environment" hidden>
 <input type="file" id="in-archivo" multiple hidden>
+<input type="file" id="in-import" accept=".zip,application/zip" hidden>
+
+<div class="sheet" id="sh-foto" hidden>
+  <form class="panel" id="f-foto">
+    <h3 id="foto-h">¿Qué muestra esta foto?</h3>
+    <img id="foto-prev" class="prev" alt="Foto recién tomada">
+    <div class="field"><label for="fo-titulo">Título (obligatorio)</label><input id="fo-titulo" placeholder="Ej.: Fisura en muro de fachada, eje 3" autocomplete="off"></div>
+    <div class="field"><label for="fo-desc">Descripción (opcional)</label><textarea id="fo-desc" rows="3" placeholder="Qué se observa, ubicación, medida, responsable…"></textarea></div>
+    <div class="actions"><button type="button" class="mic" id="btn-dictar-foto">● Dictar</button><span class="grow"></span><button type="button" class="btn ghost" id="fo-skip">Después</button><button class="btn primary">Guardar</button></div>
+    <p class="small" id="foto-msg" hidden></p>
+  </form>
+</div>
+
+<div class="sheet" id="sh-ia" hidden>
+  <div class="panel">
+    <h3>Listo para redactar el acta</h3>
+    <ol class="steps">
+      <li>Se guardó en <strong>Descargas</strong> el archivo <strong id="ia-file"></strong>.</li>
+      <li>Toca <strong>Abrir Redactor de Actas</strong>. Se abre en Claude con tu cuenta Pro.</li>
+      <li>Allá toca <strong>Elegir archivo de la reunión</strong> y selecciona ese archivo. La IA redacta el acta; la revisas, la editas y descargas el PDF.</li>
+    </ol>
+    <p class="small" id="ia-audio" hidden>Las grabaciones de audio no van a la IA (no puede escucharlas); sí van tus notas dictadas y las fotos con sus títulos.</p>
+    <div class="actions"><button type="button" class="btn ghost" data-close>Cerrar</button><a class="btn primary" id="ia-open" target="_blank" rel="noopener">Abrir Redactor de Actas</a></div>
+  </div>
+</div>
 
 <div class="sheet" id="sh-mtg" hidden>
   <form class="panel" id="f-mtg">
