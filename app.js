@@ -2,7 +2,7 @@
 const $ = s => document.querySelector(s);
 const TIPOS = ['Comité de obra','Visita técnica','Reunión con cliente','Reunión con copropiedad','Entrega de obra','Otra'];
 const EXT = {'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/heic':'heic','video/mp4':'mp4','video/quicktime':'mov','video/webm':'webm','video/3gpp':'3gp','audio/webm':'webm','audio/mp4':'m4a','audio/mpeg':'mp3','audio/ogg':'ogg','audio/aac':'aac','audio/wav':'wav','audio/amr':'amr','application/pdf':'pdf'};
-const LABEL = {foto:'Foto', video:'Video', audio:'Audio', nota:'Nota', archivo:'Archivo'};
+const LABEL = {foto:'Foto', video:'Video', audio:'Audio', nota:'Nota', archivo:'Archivo', transcripcion:'Transcripción'};
 
 /* ---------- utilidades ---------- */
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -97,8 +97,13 @@ function itemHTML(it){
   let inner = '';
   const visual = it.tipo === 'foto' || it.tipo === 'video';
   if (visual) inner = it.titulo ? `<div class="ttl">${esc(it.titulo)}</div>` : `<button class="ttl none" data-act="titulo">Sin título · toca para agregar</button>`;
+  if (it.tipo === 'transcripcion'){
+    const segs = it.segmentos || [];
+    inner = `<details class="trx"><summary>${segs.length} intervenciones · ${[...new Set(segs.map(x => x.h))].map(esc).join(', ')}</summary>${segs.map(x => `<p><b>${esc(x.h)}:</b> ${esc(x.texto)}</p>`).join('')}</details>`;
+  }
+  const comp = it.compromisos || [];
   if (it.tipo === 'nota') inner = `<div class="note">${esc(it.texto)}</div>`;
-  else {
+  else if (it.tipo !== 'transcripcion') {
     const u = urlFor(it);
     inner += it.tipo === 'foto' ? `<img src="${u}" alt="${esc(it.titulo || 'Foto')}" loading="lazy">`
       : it.tipo === 'video' ? `<video src="${u}" controls playsinline preload="metadata"></video>`
@@ -106,6 +111,7 @@ function itemHTML(it){
       : `<div class="note">${esc(it.nombre)}</div>`;
     if (it.texto) inner += `<div class="cap">${esc(it.texto)}</div>`;
   }
+  if (comp.length) inner += `<div class="comp"><b>Compromisos detectados</b>${comp.map(c => `<div>• ${esc(c.actividad)}${c.responsable ? ` <span class="chip">${esc(c.responsable)}</span>` : ''}${c.fecha ? ` <span class="small">${esc(c.fecha)}</span>` : ''}</div>`).join('')}</div>`;
   const info = [it.notaVoz ? 'Nota de voz · por transcribir' : LABEL[it.tipo], it.dur ? fDur(it.dur) : '', it.blob ? fMB(it.blob.size) : ''].filter(Boolean).join(' · ');
   return `<li class="it" data-id="${it.id}"><div class="t mono">${fHora(it.creado)}</div><div class="body">${inner}
     <div class="foot"><span class="k">${info}</span><button data-act="${visual ? 'titulo' : 'comment'}">${visual ? (it.titulo ? 'Editar título' : 'Agregar título') : it.tipo === 'nota' ? 'Editar' : it.texto ? 'Editar comentario' : 'Comentar'}</button><button class="del" data-act="delete">Eliminar</button></div></div></li>`;
@@ -308,12 +314,94 @@ $('#f-nota').addEventListener('submit', async e => {
   e.preventDefault(); stopDictado();
   const texto = $('#n-texto').value.trim();
   const voz = await stopNotaVoz(true);
-  if (notaItem){ notaItem.texto = texto; await idb.put('items', notaItem); }
+  if (notaItem){ notaItem.texto = texto; if (notaItem.tipo === 'nota') notaItem.compromisos = detectarCompromisos([{h: '', texto}], nombresCortos()); await idb.put('items', notaItem); }
   else if (voz) await idb.put('items', {id: uid(), rid: S.cur.id, tipo: 'audio', notaVoz: true, creado: Date.now() - voz.dur * 1000, nombre: 'nota-de-voz', mime: voz.mime, blob: voz.blob, dur: voz.dur, texto});
-  else if (texto) await idb.put('items', {id: uid(), rid: S.cur.id, tipo: 'nota', creado: Date.now(), texto});
+  else if (texto) await idb.put('items', {id: uid(), rid: S.cur.id, tipo: 'nota', creado: Date.now(), texto, compromisos: detectarCompromisos([{h: '', texto}], nombresCortos())});
   closeSheets(); await refresh(!notaItem);
 });
 $('#c-nota').onclick = () => openNota(null);
+
+/* ---------- compromisos: detección automática (funciona sin internet) ---------- */
+const nombresCortos = () => asistList(S.cur || {}).map(a => a.split(/\s+[–-]\s+/)[0].trim()).filter(Boolean);
+const VERBOS = '(?:se\\s+encarga(?:rá)?\\s+de|se\\s+compromete\\s+a|queda(?:rá)?\\s+encargad[oa]\\s+de|va\\s+a|debe|tiene\\s+que|enviará|entregará|revisará|hará|realizará|gestionará|coordinará|presentará|programará|verificará)';
+const FECHA = /\b(?:para\s+(?:el\s+)?|antes\s+del?\s+|el\s+|a\s+más\s+tardar\s+el\s+)((?:próximo\s+)?(?:lunes|martes|miércoles|jueves|viernes|sábado|domingo)(?:\s+\d{1,2})?|mañana|pasado\s+mañana|la\s+(?:próxima|otra)\s+semana|fin\s+de\s+mes|\d{1,2}\s+de\s+[a-záéíóú]+|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)/i;
+function limpiaAct(t){ t = t.replace(FECHA, '').replace(/\s+/g, ' ').replace(/[\s.,;:]+$/, '').trim(); return t.charAt(0).toUpperCase() + t.slice(1); }
+function detectarCompromisos(segs, nombres){
+  const out = [], vistos = new Set();
+  const nom = nombres.map(n => n.split(/\s+/)[0]).filter(n => n.length > 2);
+  const reTercera = nom.length ? new RegExp(`\\b(${nom.map(n => n.normalize('NFC').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?:\\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?\\s+${VERBOS}\\s+(.{6,})`, 'i') : null;
+  const reAreas = new RegExp(`\\b((?:la\\s+|el\\s+)?(?:interventoría|supervisión|contratista|administración|administrador(?:a)?|residente|HDZ|Grupo\\s+HDZ|el\\s+cliente|la\\s+copropiedad))\\s+${VERBOS}\\s+(.{6,})`, 'i');
+  const rePrimera = /\b(?:yo\s+)?(?:me\s+encargo\s+de|me\s+comprometo\s+a|yo\s+(?:reviso|envío|hago|entrego|llamo|mando|programo|coordino)|nosotros\s+(?:nos\s+encargamos\s+de|enviamos|entregamos|revisamos)|nos\s+comprometemos\s+a)\s+(.{6,})/i;
+  const rePend = /\bqueda(?:n)?\s+pendiente(?:s)?\s+(?:de\s+)?(.{6,})/i;
+  for (const sg of segs){
+    for (const fr of String(sg.texto || '').split(/(?<=[.;!?])\s+|\s+y\s+(?=(?:la|el|los|las)\s+[a-záéíóúñ]+\s+(?:se|debe|va|tiene|enviará|entregará|revisará)\b|[A-ZÁÉÍÓÚ][a-záéíóúñ]+\s+(?:se|debe|va|tiene)\b)/)){
+      let m, resp = '', act = '';
+      if (reTercera && (m = fr.match(reTercera))){ resp = nombres.find(n => n.toLowerCase().startsWith(m[1].toLowerCase())) || m[1]; act = m[2]; }
+      else if ((m = fr.match(reAreas))){ resp = m[1].replace(/^(la|el)\s+/i, ''); resp = resp.charAt(0).toUpperCase() + resp.slice(1); act = m[2]; }
+      else if ((m = fr.match(rePrimera))){ resp = sg.h || ''; act = m[1]; }
+      else if ((m = fr.match(rePend))){ act = m[1]; }
+      else continue;
+      const f = fr.match(FECHA), a = limpiaAct(act);
+      if (a.length < 5 || vistos.has(a.toLowerCase())) continue;
+      vistos.add(a.toLowerCase()); out.push({actividad: a, responsable: resp, fecha: f ? f[1] : ''});
+    }
+  }
+  return out;
+}
+
+/* ---------- transcripción en vivo con hablantes ---------- */
+let tr = null;
+function abrirTranscripcion(){
+  if (rec) return toast('Detén la grabación de audio primero: el micrófono está ocupado.');
+  if (!SR) return toast('Este navegador no tiene reconocimiento de voz. Ábrela en Chrome, o usa Grabar.');
+  if (!navigator.onLine) return toast('La transcripción en vivo necesita internet. Sin señal usa «Grabar»; la transcribo después.');
+  const ns = nombresCortos();
+  tr = {spk: ns[0] || 'Participante 1', extras: ns.length ? [] : ['Participante 1'], segs: [], t0: Date.now(), on: true, pausa: false, li: 0, err: null, quick: 0};
+  $('#tr-list').innerHTML = ''; $('#tr-int').textContent = ''; $('#tr-msg').textContent = 'Toca el nombre de quien está hablando. Si una frase quedó mal asignada, tócala para pasarla al nombre seleccionado.'; $('#tr-msg').style.color = '';
+  $('#tr-pause').textContent = 'Pausar'; renderSpk(); $('#sh-tr').hidden = false; trRun(); trTick();
+  navigator.wakeLock?.request('screen').then(w => { if (tr) tr.wake = w; }).catch(() => {});
+}
+function trNames(){ return [...new Set([...nombresCortos(), ...tr.extras, ...tr.segs.map(x => x.h)])]; }
+function renderSpk(){ $('#tr-spk').innerHTML = trNames().map(n => `<button class="chipbtn${n === tr.spk ? ' on' : ''}" data-spk="${esc(n)}">${esc(n)}</button>`).join('') + `<button class="chipbtn add" data-spk="+">+ Otro</button>`; }
+function renderSegs(){ const l = $('#tr-list'); l.innerHTML = tr.segs.map((x, i) => `<p class="seg" data-seg="${i}"><b>${esc(x.h)}:</b> ${esc(x.texto)}</p>`).join(''); l.scrollTop = l.scrollHeight; }
+function trTick(){ if (!tr) return; $('#tr-time').textContent = fDur((Date.now() - tr.t0) / 1000); setTimeout(trTick, 1000); }
+function trRun(){
+  if (!tr || !tr.on || tr.pausa) return;
+  const r = new SR(); tr.r = r; const t0 = Date.now();
+  r.lang = LANGS[tr.li]; r.continuous = false; r.interimResults = true;
+  r.onresult = e => { let fin = '', inter = ''; for (let i = e.resultIndex; i < e.results.length; i++){ const t = e.results[i][0].transcript; if (e.results[i].isFinal) fin += t; else inter += t; }
+    if (fin.trim()){ const last = tr.segs[tr.segs.length - 1]; if (last && last.h === tr.spk && Date.now() - last.t < 20000){ last.texto += ' ' + fin.trim(); last.t = Date.now(); } else tr.segs.push({h: tr.spk, texto: fin.trim(), t: Date.now()}); renderSegs(); tr.quick = 0; }
+    $('#tr-int').textContent = inter ? tr.spk + ': ' + inter : ''; };
+  r.onerror = e => { tr && (tr.err = e.error); };
+  r.onend = () => {
+    if (!tr || tr.r !== r) return;
+    const err = tr.err; tr.err = null; tr.quick = Date.now() - t0 < 1500 ? tr.quick + 1 : 0;
+    if (err === 'language-not-supported' && tr.li < LANGS.length - 1){ tr.li++; return trRun(); }
+    if ((!err || err === 'no-speech' || err === 'aborted') && tr.quick < 8) return trRun();
+    tr.pausa = true; $('#tr-pause').textContent = 'Reanudar';
+    $('#tr-msg').textContent = (ERRTXT[err] || 'La transcripción se detuvo.') + ' Toca «Reanudar» o «Terminar y guardar».'; $('#tr-msg').style.color = 'var(--danger)';
+  };
+  try { r.start(); } catch(_){}
+}
+$('#tr-spk').addEventListener('click', e => {
+  const b = e.target.closest('[data-spk]'); if (!b) return;
+  if (b.dataset.spk === '+'){ const n = (prompt('Nombre de quien habla:', 'Participante ' + (trNames().length + 1)) || '').trim(); if (!n) return; tr.extras.push(n); tr.spk = n; }
+  else tr.spk = b.dataset.spk;
+  renderSpk();
+});
+$('#tr-list').addEventListener('click', e => { const p = e.target.closest('[data-seg]'); if (!p) return; tr.segs[+p.dataset.seg].h = tr.spk; renderSegs(); });
+$('#tr-pause').onclick = () => { if (!tr) return; tr.pausa = !tr.pausa; $('#tr-pause').textContent = tr.pausa ? 'Reanudar' : 'Pausar'; $('#tr-msg').style.color = ''; if (tr.pausa){ try { tr.r?.abort(); } catch(_){} } else { tr.quick = 0; trRun(); } };
+$('#tr-stop').onclick = async () => {
+  const t = tr; if (!t) return; tr = null; try { t.r?.abort(); } catch(_){} try { t.wake?.release(); } catch(_){}
+  $('#sh-tr').hidden = true;
+  if (!t.segs.length) return toast('No se guardó nada: no hubo texto transcrito.');
+  const segmentos = t.segs.map(({h, texto}) => ({h, texto}));
+  const compromisos = detectarCompromisos(segmentos, nombresCortos());
+  await idb.put('items', {id: uid(), rid: S.cur.id, tipo: 'transcripcion', creado: t.t0, dur: (Date.now() - t.t0) / 1000, segmentos, texto: segmentos.map(x => `${x.h}: ${x.texto}`).join('\n'), compromisos});
+  await refresh(true);
+  toast(compromisos.length ? `Transcripción guardada. ${compromisos.length} compromiso(s) detectado(s).` : 'Transcripción guardada.');
+};
+$('#c-hablar').onclick = abrirTranscripcion;
 
 /* ---------- reuniones ---------- */
 let editing = null;
@@ -387,7 +475,7 @@ async function exportar(r, items, btn){
       const hora = fHora(it.creado), hh = new Date(it.creado).toTimeString().slice(0, 8).replace(/:/g, '');
       let archivo = null;
       if (it.blob){ const ext = EXT[baseMime(it.mime)] || (it.nombre?.split('.').pop()) || 'bin'; archivo = `medios/${String(k).padStart(3, '0')}_${hh}_${it.tipo}.${ext}`; medios.file(archivo.slice(7), it.blob); }
-      elementos.push({n: k, hora, momento: new Date(it.creado).toISOString(), tipo: it.notaVoz ? 'nota_de_voz' : it.tipo, transcribir: it.tipo === 'audio' || undefined, archivo, mime: it.mime, duracion_s: it.dur ? Math.round(it.dur) : undefined, titulo: it.titulo || undefined, texto: it.texto || ''});
+      elementos.push({n: k, hora, momento: new Date(it.creado).toISOString(), segmentos: it.segmentos, compromisos: it.compromisos, tipo: it.notaVoz ? 'nota_de_voz' : it.tipo, transcribir: it.tipo === 'audio' || undefined, archivo, mime: it.mime, duracion_s: it.dur ? Math.round(it.dur) : undefined, titulo: it.titulo || undefined, texto: it.texto || ''});
       const tipoTxt = it.notaVoz ? 'Nota de voz (transcribir)' : it.tipo === 'audio' ? 'Grabación (transcribir)' : LABEL[it.tipo];
       lineas.push(`### ${k}. ${hora} — ${tipoTxt}${it.titulo ? ': ' + it.titulo : ''}${it.dur ? ' (' + fDur(it.dur) + ')' : ''}` + (archivo ? `\nArchivo: ${archivo}` : '') + (it.texto ? `\n\n${it.texto}` : '') + '\n');
     }
@@ -417,7 +505,7 @@ $('#in-import').addEventListener('change', async e => {
     const r = {id: uid(), creada: Date.now(), titulo: meta.titulo || 'Reunión importada', tipo: meta.tipo || TIPOS[0], fecha: new Date(meta.fecha).getTime() || Date.now(),
       proyecto: meta.proyecto || '', lugar: meta.lugar || '', asistentes: (meta.asistentes || []).join('\n'), importada: Date.now()};
     for (const el of meta.elementos || []){
-      const it = {id: uid(), rid: r.id, tipo: el.tipo === 'nota_de_voz' ? 'audio' : el.tipo, notaVoz: el.tipo === 'nota_de_voz' || undefined, creado: new Date(el.momento).getTime() || Date.now(), titulo: el.titulo || '', texto: el.texto || '', dur: el.duracion_s || undefined};
+      const it = {id: uid(), rid: r.id, segmentos: el.segmentos, compromisos: el.compromisos, tipo: el.tipo === 'nota_de_voz' ? 'audio' : el.tipo, notaVoz: el.tipo === 'nota_de_voz' || undefined, creado: new Date(el.momento).getTime() || Date.now(), titulo: el.titulo || '', texto: el.texto || '', dur: el.duracion_s || undefined};
       if (el.archivo && zip.file(base + el.archivo)){ const mime = el.mime || Object.keys(EXT).find(k => EXT[k] === el.archivo.split('.').pop()) || 'application/octet-stream'; it.blob = new Blob([await zip.file(base + el.archivo).async('arraybuffer')], {type: mime}); it.mime = mime; it.nombre = el.archivo.split('/').pop(); }
       await idb.put('items', it);
     }
@@ -459,7 +547,7 @@ async function redactarIA(){
     const elementos = []; let k = 0;
     for (const it of S.items){
       k++;
-      const el = {n: k, hora: fHora(it.creado), tipo: it.notaVoz ? 'nota_de_voz' : it.tipo, titulo: it.titulo || undefined, texto: it.texto || '', duracion_s: it.dur ? Math.round(it.dur) : undefined};
+      const el = {n: k, hora: fHora(it.creado), tipo: it.notaVoz ? 'nota_de_voz' : it.tipo, titulo: it.titulo || undefined, segmentos: it.segmentos, compromisos_detectados: it.compromisos?.length ? it.compromisos : undefined, texto: it.texto || '', duracion_s: it.dur ? Math.round(it.dur) : undefined};
       if (it.tipo === 'foto' && it.blob) el.foto = await fotoIA(it.blob);
       if (it.tipo === 'video' && it.blob) el.foto = await videoFrame(it.blob);
       if (!el.foto) delete el.foto;

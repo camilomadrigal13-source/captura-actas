@@ -83,8 +83,8 @@ main{flex:1;padding:16px 16px calc(150px + env(safe-area-inset-bottom,0px))}
 @keyframes blink{50%{opacity:.25}}
 
 .capture{position:fixed;left:0;right:0;bottom:0;z-index:6;background:var(--surface);border-top:1px solid var(--line);padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px))}
-.capture .in{max-width:640px;margin:0 auto;display:grid;grid-template-columns:repeat(5,1fr);gap:2px}
-.capture button{display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:0;border-radius:10px;padding:8px 2px;font-size:.76rem;font-weight:600;color:var(--ink)}
+.capture .in{max-width:640px;margin:0 auto;display:grid;grid-template-columns:repeat(6,1fr);gap:2px}
+.capture button{display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:0;border-radius:10px;padding:8px 1px;font-size:.7rem;font-weight:600;color:var(--ink)}
 .capture svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .capture button.main{background:var(--accent);color:var(--accent-ink)}
 .capture button.on{color:var(--rec)}
@@ -123,6 +123,18 @@ main{flex:1;padding:16px 16px calc(150px + env(safe-area-inset-bottom,0px))}
 .prev{display:block;width:100%;max-height:34vh;object-fit:contain;background:#000;border-radius:8px;margin-bottom:12px}
 .steps{margin:0 0 10px;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:.95rem}
 a.btn{text-decoration:none}
+.trp{height:92%;display:flex;flex-direction:column;gap:8px}
+.spk{display:flex;gap:6px;flex-wrap:wrap}
+.chipbtn{border:1px solid var(--line);background:var(--bg);border-radius:999px;padding:8px 12px;font-weight:600;font-size:.88rem}
+.chipbtn.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.chipbtn.add{border-style:dashed;color:var(--muted)}
+.trlist{flex:1;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--bg)}
+.trlist .seg{margin:0 0 8px;cursor:pointer}
+.interim{min-height:1.4em;color:var(--muted);font-style:italic;font-size:.9rem}
+.trx{padding:10px 14px}
+.trx summary{cursor:pointer;font-weight:600}
+.trx p{margin:6px 0 0;font-size:.92rem}
+.comp{padding:10px 14px;border-top:1px solid var(--line);font-size:.9rem;display:flex;flex-direction:column;gap:4px;background:var(--ok-bg)}
 .toast{position:fixed;left:16px;right:16px;bottom:calc(150px + env(safe-area-inset-bottom,0px));z-index:30;max-width:560px;margin:0 auto;background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:8px;font-size:.9rem}
 </style>
 </head>
@@ -149,6 +161,7 @@ a.btn{text-decoration:none}
     <button id="c-foto" class="main"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Foto</button>
     <button id="c-video"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>Video</button>
     <button id="c-audio"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span id="c-audio-l">Grabar</span></button>
+    <button id="c-hablar"><svg viewBox="0 0 24 24"><circle cx="8" cy="8" r="3"/><path d="M3 19c0-3 2.2-5 5-5s5 2 5 5"/><path d="M15 7h6M15 11h6M15 15h4"/></svg>Transcribir</button>
     <button id="c-nota"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 9h8M8 13h8M8 17h5"/></svg>Nota</button>
     <button id="c-archivo"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg>Galería</button>
   </div>
@@ -158,6 +171,17 @@ a.btn{text-decoration:none}
 <input type="file" id="in-video" accept="video/*" capture="environment" hidden>
 <input type="file" id="in-archivo" multiple hidden>
 <input type="file" id="in-import" accept=".zip,application/zip" hidden>
+
+<div class="sheet" id="sh-tr" hidden>
+  <div class="panel trp">
+    <div class="row"><h3 style="flex:1;margin:0">Transcripción con hablantes</h3><span class="mono" id="tr-time">00:00</span></div>
+    <p class="small" id="tr-msg"></p>
+    <div class="spk" id="tr-spk"></div>
+    <div class="trlist" id="tr-list"></div>
+    <div class="interim" id="tr-int"></div>
+    <div class="actions"><button type="button" class="btn ghost" id="tr-pause">Pausar</button><span class="grow"></span><button type="button" class="btn primary" id="tr-stop">Terminar y guardar</button></div>
+  </div>
+</div>
 
 <div class="sheet" id="sh-foto" hidden>
   <form class="panel" id="f-foto">
