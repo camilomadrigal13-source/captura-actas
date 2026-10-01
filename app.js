@@ -470,7 +470,9 @@ async function redactarIA(){
     descargar(file);
     delete r.pendienteIA; r.enviadaIA = Date.now(); await idb.put('reuniones', r); await loadReuniones(); S.cur = S.reuniones.find(x => x.id === r.id); renderMeeting(); updateNet();
     $('#ia-file').textContent = file.name; $('#ia-audio').hidden = !S.items.some(i => i.tipo === 'audio');
-    $('#ia-open').href = REDACTOR_URL; $('#sh-ia').hidden = false;
+    const android = /Android/i.test(navigator.userAgent);
+    $('#ia-open').href = android ? `intent://${REDACTOR_URL.replace(/^https:\/\//, '')}#Intent;scheme=https;package=com.anthropic.claude;S.browser_fallback_url=${encodeURIComponent(REDACTOR_URL)};end` : REDACTOR_URL;
+    $('#ia-web').href = REDACTOR_URL; $('#ia-web').hidden = !android; $('#sh-ia').hidden = false;
   } catch(e){ toast('No se pudo preparar: ' + (e.message || e)); }
   const b = $('#btn-ia'); if (b){ b.disabled = false; b.textContent = 'Redactar acta con IA'; }
 }
