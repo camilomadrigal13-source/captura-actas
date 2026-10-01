@@ -135,6 +135,19 @@ a.btn{text-decoration:none}
 .trx summary{cursor:pointer;font-weight:600}
 .trx p{margin:6px 0 0;font-size:.92rem}
 .comp{padding:10px 14px;border-top:1px solid var(--line);font-size:.9rem;display:flex;flex-direction:column;gap:4px;background:var(--ok-bg)}
+.msec{margin-bottom:10px}
+.msec summary{font-weight:700;cursor:pointer;padding:6px 0;font-family:var(--f-display);font-size:1.05rem}
+.mrow{display:flex;gap:6px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line);font-size:.92rem}
+.mrow > div{flex:1;min-width:0}
+.mrow .x{background:none;border:0;color:var(--danger);font-weight:700;padding:4px 8px}
+.mcomp{display:flex;flex-direction:column;gap:4px}
+.mcomp input{width:100%;border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:6px 8px;min-width:0}
+.mcomp .row{flex-wrap:nowrap}
+.ubic{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:.88rem;color:var(--muted)}
+.ubic > span{flex:1;min-width:0}
+.ubic svg{width:20px;height:20px;flex:none;stroke:var(--accent);fill:none;stroke-width:2}
+.ubic a{color:var(--accent);font-size:.78rem}
+.ubic .btn{padding:6px 10px;font-size:.82rem;flex:none}
 .toast{position:fixed;left:16px;right:16px;bottom:calc(150px + env(safe-area-inset-bottom,0px));z-index:30;max-width:560px;margin:0 auto;background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:8px;font-size:.9rem}
 </style>
 </head>
@@ -171,6 +184,15 @@ a.btn{text-decoration:none}
 <input type="file" id="in-video" accept="video/*" capture="environment" hidden>
 <input type="file" id="in-archivo" multiple hidden>
 <input type="file" id="in-import" accept=".zip,application/zip" hidden>
+
+<div class="sheet" id="sh-min" hidden>
+  <div class="panel trp">
+    <h3 style="margin:0">Minuta organizada</h3>
+    <p class="small" style="margin:0">Ordenada en el celular, sin internet: correcciones aplicadas, compromisos sin repetir, temas y datos clave. Toca ✕ para descartar lo que no deba ir al acta y corrige los compromisos si hace falta.</p>
+    <div class="trlist" id="min-body"></div>
+    <div class="actions"><button type="button" class="btn ghost" id="min-regen">Volver a organizar</button><span class="grow"></span><button type="button" class="btn ghost" data-close>Cerrar</button><button type="button" class="btn primary" id="min-save">Guardar</button></div>
+  </div>
+</div>
 
 <div class="sheet" id="sh-tr" hidden>
   <div class="panel trp">

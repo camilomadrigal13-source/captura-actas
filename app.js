@@ -82,8 +82,9 @@ function renderMeeting(){
     <h2>${esc(r.titulo)}</h2>
     <div class="sub">${esc([r.tipo, r.proyecto].filter(Boolean).join(' · '))}</div>
     <div class="sub mono">${esc(fFecha(r.fecha))}${r.lugar ? ' · ' + esc(r.lugar) : ''}</div>
+    <div class="ubic">${r.ubicacion ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg><span>${esc(r.ubicacion.direccion || 'Dirección pendiente (se busca al tener internet)')}<br><a href="https://www.google.com/maps?q=${r.ubicacion.lat},${r.ubicacion.lon}" target="_blank" rel="noopener" class="mono">${r.ubicacion.lat}, ${r.ubicacion.lon}</a> <span class="small">±${r.ubicacion.precision} m</span></span>` : '<span class="small">Sin ubicación registrada.</span>'}<button class="btn ghost" id="btn-ubic">${r.ubicacion ? 'Actualizar' : 'Registrar ubicación'}</button></div>
     ${asis.length ? `<details><summary>${asis.length} asistente${asis.length > 1 ? 's' : ''}</summary><ul>${asis.map(a => `<li>${esc(a)}</li>`).join('')}</ul></details>` : `<div class="sub" style="margin-top:8px">Sin asistentes. Tip: toma foto a la lista de asistencia firmada.</div>`}
-    <div class="actions"><button class="btn primary" id="btn-ia" ${n ? '' : 'disabled'}>Redactar acta con IA</button><button class="btn" id="btn-enviar" ${n ? '' : 'disabled'}>Exportar ZIP</button><span class="chip" style="align-self:center">${n} elemento${n === 1 ? '' : 's'}</span></div>
+    <div class="actions"><button class="btn" id="btn-min" ${n ? '' : 'disabled'}>Organizar${r.minuta ? ' ✓' : ''}</button><button class="btn primary" id="btn-ia" ${n ? '' : 'disabled'}>Redactar acta con IA</button><button class="btn" id="btn-enviar" ${n ? '' : 'disabled'}>Exportar ZIP</button><span class="chip" style="align-self:center">${n} elemento${n === 1 ? '' : 's'}</span></div>
     ${sinTitulo ? `<p class="small warnline">${sinTitulo} foto${sinTitulo > 1 ? 's' : ''} sin título. Toca «Agregar título» en cada una.</p>` : ''}
     ${r.pendienteIA ? `<p class="small" style="margin:10px 0 0">En cola desde ${esc(fFecha(r.pendienteIA))}: se prepara para la IA cuando haya internet.</p>` : ''}
     ${r.enviadaIA && !r.pendienteIA ? `<p class="small" style="margin:10px 0 0">Preparada para IA el ${esc(fFecha(r.enviadaIA))}.</p>` : ''}
@@ -91,6 +92,8 @@ function renderMeeting(){
   ${n ? `<ol class="timeline">${S.items.map(itemHTML).join('')}</ol>` : `<div class="empty"><b>Nada capturado todavía</b>Usa los botones de abajo. Todo queda en orden de captura.</div>`}`;
   $('#btn-enviar').onclick = () => exportar(S.cur, S.items);
   $('#btn-ia').onclick = redactarIA;
+  $('#btn-ubic').onclick = () => tomarUbicacion(S.cur, false);
+  $('#btn-min').onclick = () => abrirMinuta(false);
 }
 
 function itemHTML(it){
@@ -118,6 +121,29 @@ function itemHTML(it){
 }
 
 /* ---------- navegación ---------- */
+/* ---------- ubicación de la reunión (GPS + dirección cuando hay internet) ---------- */
+async function tomarUbicacion(r, auto){
+  if (!navigator.geolocation) return auto || toast('Este celular no permite obtener la ubicación.');
+  const b = $('#btn-ubic'); if (b){ b.disabled = true; b.textContent = 'Buscando GPS…'; }
+  const pos = await new Promise(ok => navigator.geolocation.getCurrentPosition(ok, () => ok(null), {enableHighAccuracy: true, timeout: 20000, maximumAge: 30000}));
+  if (!pos){ if (b){ b.disabled = false; b.textContent = r.ubicacion ? 'Actualizar' : 'Registrar ubicación'; } return toast('No se pudo obtener la ubicación. Activa el GPS y el permiso de ubicación para esta app.'); }
+  r.ubicacion = {lat: +pos.coords.latitude.toFixed(6), lon: +pos.coords.longitude.toFixed(6), precision: Math.round(pos.coords.accuracy), tomada: Date.now()};
+  await idb.put('reuniones', r); if (S.cur?.id === r.id) renderMeeting();
+  toast(`Ubicación registrada (±${r.ubicacion.precision} m).`);
+  await direccion(r);
+}
+async function direccion(r){
+  if (!navigator.onLine || !r?.ubicacion || r.ubicacion.direccion) return;
+  try {
+    const j = await (await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${r.ubicacion.lat}&lon=${r.ubicacion.lon}&zoom=18&accept-language=es`)).json();
+    const a = j.address || {};
+    const partes = [[a.road, a.house_number].filter(Boolean).join(' #'), a.neighbourhood || a.suburb, a.city || a.town || a.village || a.municipality, a.state].filter(Boolean);
+    if (!partes.length && !j.display_name) return;
+    r.ubicacion.direccion = partes.length ? partes.join(', ') : j.display_name.split(',').slice(0, 4).join(',');
+    await idb.put('reuniones', r); if (S.cur?.id === r.id) renderMeeting();
+  } catch(_){}
+}
+
 async function openMeeting(id){ S.cur = S.reuniones.find(r => r.id === id); if (!S.cur) return; freeUrls(); await recover(); await loadItems(); S.view = 'meeting'; render(); scrollTo(0, 0); }
 async function goHome(){ if (rec) return toast('Detén la grabación antes de salir.'); freeUrls(); S.view = 'home'; S.cur = null; await loadReuniones(); render(); updateNet(); }
 async function refresh(scrollEnd){ await loadItems(); renderMeeting(); if (scrollEnd) scrollTo(0, document.body.scrollHeight); }
@@ -349,6 +375,131 @@ function detectarCompromisos(segs, nombres){
   return out;
 }
 
+/* ---------- preprocesador: ordena la reunión antes de la IA (sin internet, instantáneo) ---------- */
+const TEMAS_KW = [
+  ['Avance de obra', ['avance', 'porcentaje', 'por ciento', '%', 'programación', 'programacion', 'cronograma', 'atraso', 'atrasad', 'adelant', 'rendimiento', 'frente de obra', 'ejecutad', 'terminad', 'cuadrilla']],
+  ['Calidad y ensayos', ['ensayo', 'calidad', 'especificaci', 'resistencia', 'adherencia', 'prueba', 'muestra', 'laboratorio', 'fisura', 'grieta', 'defecto', 'norma', 'nsr', 'filtraci', 'humedad', 'impermeabiliz', 'curado', 'espesor']],
+  ['SST y ambiental', ['seguridad', 'sst', 'epp', 'arnés', 'arnes', 'altura', 'accidente', 'incidente', 'señaliz', 'senaliz', 'ambiental', 'residuo', 'escombro', 'andamio', 'casco', 'línea de vida', 'linea de vida']],
+  ['Administrativo y financiero', ['pago', 'factura', 'acta de cobro', 'anticipo', 'presupuesto', 'precio', 'apu', 'adicional', 'mayores cantidades', 'contrato', 'póliza', 'poliza', 'otrosí', 'otrosi', 'cotizaci', 'millones', 'pesos', '$']],
+  ['Afectaciones a residentes', ['residente', 'vecino', 'copropiet', 'afectaci', 'queja', 'horario', 'ruido', 'parqueadero', 'ascensor', 'administración del edificio']],
+  ['Pendientes y entrega', ['pendiente', 'entrega', 'garantía', 'garantia', 'manual', 'recibo', 'inventario', 'reparaci', 'retoque']],
+];
+const RE_CORR = /^(?:no[,.]?\s+)?(?:(?:perdón|perdon|corrijo|me\s+equivoqu[ée]|rectifico|quise\s+decir|mejor\s+dicho|en\s+realidad|más\s+bien|mas\s+bien)[,:.]?\s*)+/i;
+const RE_NOMEJOR = /^no[,.]?\s+(?:mejor|sino)\s+/i;
+const RE_CANCEL = /\b(?:se\s+cancela|cancelamos|queda\s+sin\s+efecto|ya\s+no\s+(?:se\s+va\s+a|va\s+a|vamos\s+a|se\s+(?:hace|hará|va))|olvid(?:en|emos)\s+lo\s+de)\b/i;
+const RE_DUDA = /\b(?:creo\s+que|me\s+parece|más\s+o\s+menos|mas\s+o\s+menos|aproximadamente|aprox\.?|no\s+estoy\s+seguro|habría\s+que\s+(?:confirmar|verificar|revisar)|hay\s+que\s+confirmar|por\s+confirmar|tal\s+vez|quizás|quizas|de\s+pronto)\b/i;
+const RE_DATOS = [
+  ['Porcentaje', /\b\d{1,3}(?:[.,]\d+)?\s?(?:%|por\s?ciento)/gi],
+  ['Cantidad', /\b\d+(?:[.,]\d+)?\s?(?:m²|m2|m³|m3|ml|metros(?:\s+(?:cuadrados|cúbicos|cubicos|lineales))?|kg|kilos|toneladas|unidades|galones|bultos|rollos|kits?)\b/gi],
+  ['Valor', /(?:\$\s?\d[\d.,]*(?:\s?(?:millones|mil))?|\b\d[\d.,]*\s?(?:millones|mil)\s?(?:de\s)?pesos)/gi],
+  ['Ubicación', /\b(?:eje|ejes|nivel|piso|torre|bloque|apartamento|apto|cubierta|terraza|fachada|sótano|sotano|zona)\s+(?:[A-Z]?\d+[A-Z]?|norte|sur|oriental|occidental|principal|[A-Z])\b/gi],
+];
+const sinTilde = t => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function limpiar(t){
+  return String(t || '')
+    .replace(/(^|[\s,])(?:eh+|em+|mmm+|ajá|aja|o\s+sea|digamos)(?=[\s,.;]|$)[,]?/gi, '$1')
+    .replace(/^(?:bueno|listo|este|entonces|pues)[,]\s*/i, '')
+    .replace(/\b(\p{L}+)(?:\s+\1\b)+/giu, '$1')
+    .replace(/\s+([,.;])/g, '$1').replace(/\s{2,}/g, ' ').trim();
+}
+function temaDe(t){ const x = sinTilde(t); let best = null, n = 0; for (const [tema, kws] of TEMAS_KW){ const c = kws.filter(k => x.includes(sinTilde(k))).length; if (c > n){ n = c; best = tema; } } return best; }
+const palabras = t => new Set(sinTilde(t).split(/[^a-z0-9ñ]+/).filter(w => w.length > 3));
+function parecido(a, b){ const A = palabras(a), B = palabras(b); if (!A.size || !B.size) return 0; let c = 0; A.forEach(w => { if (B.has(w)) c++; }); return c / Math.min(A.size, B.size); }
+
+function preprocesar(r, items){
+  const nombres = nombresCortos();
+  const frases = [], correcciones = [], porConfirmar = [], datos = [], fotos = [];
+  // 1) fuentes → frases limpias, en orden de captura, con hablante y hora
+  for (const it of items){
+    const hora = fHora(it.creado);
+    if (it.tipo === 'foto' || it.tipo === 'video'){ fotos.push({hora, titulo: it.titulo || 'Sin título', descripcion: it.texto || '', tema: temaDe((it.titulo || '') + ' ' + (it.texto || ''))}); continue; }
+    const segs = it.tipo === 'transcripcion' ? (it.segmentos || []) : it.texto ? [{h: '', texto: it.texto}] : [];
+    if (it.tipo === 'audio' && !it.texto){ porConfirmar.push({texto: `${it.notaVoz ? 'Nota de voz' : 'Grabación'} de las ${hora} sin transcribir`, motivo: 'Revisar el audio'}); continue; }
+    for (const sg of segs) for (const raw of String(sg.texto).split(/(?<=[.;!?])\s+/)){
+      const t = limpiar(raw); if (t.length < 3) continue;
+      frases.push({hora, h: sg.h || '', texto: t, orig: raw.trim(), fuente: it.tipo});
+    }
+  }
+  // 2) correcciones y cancelaciones (la versión final reemplaza a la anterior del mismo hablante)
+  const vivas = [];
+  for (const f of frases){
+    const corr = f.texto.match(RE_CORR) || f.texto.match(RE_NOMEJOR);
+    if (corr && vivas.length){
+      const prev = [...vivas].reverse().find(p => p.h === f.h) || vivas[vivas.length - 1];
+      const nuevo = f.texto.slice(corr[0].length); f.texto = nuevo.charAt(0).toUpperCase() + nuevo.slice(1);
+      prev.superada = true; f.tema = prev.tema;
+      const pc = detectarCompromisos([{h: prev.h, texto: prev.texto}], nombres);
+      if (pc.length && !detectarCompromisos([{h: f.h, texto: f.texto}], nombres).length){
+        const fe = f.texto.match(FECHA), quien = nombres.find(n => sinTilde(f.texto).includes(sinTilde(n.split(/\s+/)[0])));
+        f.heredados = pc.map(c => ({...c, fecha: fe ? fe[1] : c.fecha, responsable: quien || c.responsable}));
+      }
+      correcciones.push({hora: f.hora, h: f.h, antes: prev.texto, despues: f.texto});
+      // si la corrección es solo un dato suelto («el lunes», «Pedro»), se arma la frase final sobre la anterior
+      if (f.texto.split(/\s+/).length <= 4){ const fe = f.texto.match(FECHA); f.texto = fe && prev.texto.match(FECHA) ? prev.texto.replace(prev.texto.match(FECHA)[1], fe[1]) : prev.texto + ' (corregido: ' + f.texto + ')'; }
+    }
+    f.tema = f.tema || temaDe(f.texto) || (vivas.length ? vivas[vivas.length - 1].tema : null);
+    vivas.push(f);
+  }
+  const finales = vivas.filter(f => !f.superada && (f.heredados || f.texto.split(/\s+/).length >= 3));
+  for (const f of finales){
+    if (RE_DUDA.test(f.texto) || /\?$/.test(f.texto)) porConfirmar.push({texto: f.texto, motivo: 'Se dijo con duda', hora: f.hora, h: f.h});
+    for (const [tipo, re] of RE_DATOS) for (const m of f.texto.matchAll(re)) datos.push({tipo, valor: m[0].trim(), contexto: f.texto, hora: f.hora});
+    const fe = f.texto.match(FECHA); if (fe && /\b(?:entrega|reuni|ensayo|visita|pago|cobro|comit|inicio|termin|env[ií]|program)/i.test(f.texto)) datos.push({tipo: 'Fecha', valor: fe[1], contexto: f.texto, hora: f.hora});
+  }
+  // 3) compromisos: se detectan sobre la versión final; los repetidos o cambiados quedan una sola vez (la última)
+  let comp = [];
+  for (const f of finales){
+    if (RE_CANCEL.test(f.texto)){
+      const c = comp.filter(x => !x.cancelado).map(x => [x, parecido(x.actividad, f.texto)]).sort((a, b) => b[1] - a[1])[0];
+      if (c && c[1] >= .34){ c[0].cancelado = true; correcciones.push({hora: f.hora, h: f.h, antes: c[0].actividad, despues: 'Cancelado: ' + f.texto}); }
+      else correcciones.push({hora: f.hora, h: f.h, antes: '', despues: 'Cancelación mencionada: ' + f.texto});
+      continue;
+    }
+    for (const c of [...detectarCompromisos([{h: f.h, texto: f.texto}], nombres), ...(f.heredados || [])]){
+      const prev = comp.find(x => !x.cancelado && parecido(x.actividad, c.actividad) >= .6);
+      if (prev){ const hist = `${prev.actividad} · ${prev.responsable || 'sin responsable'} · ${prev.fecha || 'sin fecha'}`; const nuevo = {actividad: c.actividad, responsable: c.responsable || prev.responsable, fecha: c.fecha || prev.fecha}; if (nuevo.responsable !== prev.responsable || nuevo.fecha !== prev.fecha) (prev.historial = prev.historial || []).push(hist); Object.assign(prev, nuevo, {hora: f.hora}); }
+      else comp.push({...c, hora: f.hora, tema: f.tema});
+    }
+  }
+  comp = comp.filter(c => !c.cancelado);
+  comp.forEach(c => { if (!c.responsable) porConfirmar.push({texto: c.actividad, motivo: 'Compromiso sin responsable'}); if (!c.fecha) porConfirmar.push({texto: c.actividad, motivo: 'Compromiso sin fecha'}); });
+  // 4) por tema, en el orden en que se trataron
+  const temas = [];
+  for (const f of finales){ const k = f.tema || 'Otros temas'; let t = temas.find(x => x.tema === k); if (!t) temas.push(t = {tema: k, entradas: []}); t.entradas.push({hora: f.hora, h: f.h, texto: f.texto}); }
+  const vistos = new Set();
+  return {generada: Date.now(), nItems: items.length, temas, compromisos: comp, correcciones, datos: datos.filter(d => { const k = d.tipo + d.valor; if (vistos.has(k)) return false; vistos.add(k); return true; }), por_confirmar: porConfirmar, fotos};
+}
+
+/* minuta: revisar y descartar antes de enviar */
+let minR = null;
+function abrirMinuta(regen){
+  const r = S.cur;
+  if (regen || !r.minuta || (r.minuta.nItems !== S.items.length && !r.minuta.editada)) r.minuta = preprocesar(r, S.items);
+  minR = r; renderMinuta(); $('#sh-min').hidden = false;
+}
+function renderMinuta(){
+  const m = minR.minuta, x = (k, i) => `<button class="x" data-mx="${k}" data-i="${i}" aria-label="Descartar">✕</button>`;
+  const sec = (t, n, body) => `<details class="msec" open><summary>${t} <span class="chip">${n}</span></summary>${body}</details>`;
+  $('#min-body').innerHTML =
+    (m.nItems !== S.items.length ? `<p class="small warnline">Capturaste cosas nuevas después de organizar. Toca «Volver a organizar» para incluirlas.</p>` : '') +
+    sec('Compromisos', m.compromisos.length, m.compromisos.map((c, i) => `<div class="mrow"><div class="mcomp"><input data-mc="${i}" data-f="actividad" value="${esc(c.actividad)}" aria-label="Actividad"><div class="row"><input data-mc="${i}" data-f="responsable" value="${esc(c.responsable)}" placeholder="Responsable" aria-label="Responsable"><input data-mc="${i}" data-f="fecha" value="${esc(c.fecha)}" placeholder="Fecha" aria-label="Fecha"></div>${c.historial ? `<span class="small">Cambió durante la reunión: ${c.historial.map(esc).join(' → ')}</span>` : ''}</div>${x('compromisos', i)}</div>`).join('') || '<p class="small">No se detectaron.</p>') +
+    sec('Correcciones aplicadas', m.correcciones.length, m.correcciones.map((c, i) => `<div class="mrow"><div><span class="small">${esc(c.hora)}${c.h ? ' · ' + esc(c.h) : ''}</span>${c.antes ? `<div><s>${esc(c.antes)}</s></div>` : ''}<div>→ ${esc(c.despues)}</div></div>${x('correcciones', i)}</div>`).join('') || '<p class="small">Ninguna.</p>') +
+    sec('Por confirmar', m.por_confirmar.length, m.por_confirmar.map((c, i) => `<div class="mrow"><div><b class="small">${esc(c.motivo)}</b><div>${esc(c.texto)}</div></div>${x('por_confirmar', i)}</div>`).join('') || '<p class="small">Nada.</p>') +
+    sec('Datos clave', m.datos.length, m.datos.map((d, i) => `<div class="mrow"><div><span class="chip">${esc(d.tipo)}</span> <b>${esc(d.valor)}</b><div class="small">${esc(d.contexto)}</div></div>${x('datos', i)}</div>`).join('') || '<p class="small">Ninguno.</p>') +
+    m.temas.map((t, ti) => sec(esc(t.tema), t.entradas.length, t.entradas.map((e, i) => `<div class="mrow"><div><span class="small">${esc(e.hora)}${e.h ? ' · ' + esc(e.h) : ''}</span><div>${esc(e.texto)}</div></div><button class="x" data-mt="${ti}" data-i="${i}" aria-label="Descartar">✕</button></div>`).join(''))).join('') +
+    (m.fotos.length ? sec('Fotos por tema', m.fotos.length, m.fotos.map(f => `<div class="mrow"><div><b>${esc(f.titulo)}</b> <span class="chip">${esc(f.tema || 'Otros temas')}</span></div></div>`).join('')) : '');
+}
+$('#min-body').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return; const m = minR.minuta;
+  if (b.dataset.mx){ m[b.dataset.mx].splice(+b.dataset.i, 1); }
+  else if (b.dataset.mt){ const t = m.temas[+b.dataset.mt]; t.entradas.splice(+b.dataset.i, 1); if (!t.entradas.length) m.temas.splice(+b.dataset.mt, 1); }
+  else return;
+  m.editada = true; renderMinuta();
+});
+$('#min-body').addEventListener('input', e => { const i = e.target.dataset.mc; if (i === undefined) return; minR.minuta.compromisos[+i][e.target.dataset.f] = e.target.value; minR.minuta.editada = true; });
+$('#min-regen').onclick = () => { abrirMinuta(true); toast('Minuta organizada de nuevo desde lo capturado.'); };
+$('#min-save').onclick = async () => { await idb.put('reuniones', minR); await loadReuniones(); S.cur = S.reuniones.find(x => x.id === minR.id); $('#sh-min').hidden = true; renderMeeting(); toast('Minuta guardada. Va con la reunión cuando redactes con IA.'); };
+
 /* ---------- transcripción en vivo con hablantes ---------- */
 let tr = null;
 function abrirTranscripcion(){
@@ -421,7 +572,7 @@ $('#f-mtg').addEventListener('submit', async e => {
   if (!data.titulo) return;
   const r = editing ? {...editing, ...data} : {id: uid(), creada: Date.now(), ...data};
   await idb.put('reuniones', r); closeSheets(); await loadReuniones();
-  if (editing){ S.cur = r; render(); } else openMeeting(r.id);
+  if (editing){ S.cur = r; render(); } else { await openMeeting(r.id); tomarUbicacion(S.cur, true); }
 });
 $('#btn-new').onclick = () => openMtg(null);
 $('#btn-edit').onclick = () => openMtg(S.cur);
@@ -479,10 +630,10 @@ async function exportar(r, items, btn){
       const tipoTxt = it.notaVoz ? 'Nota de voz (transcribir)' : it.tipo === 'audio' ? 'Grabación (transcribir)' : LABEL[it.tipo];
       lineas.push(`### ${k}. ${hora} — ${tipoTxt}${it.titulo ? ': ' + it.titulo : ''}${it.dur ? ' (' + fDur(it.dur) + ')' : ''}` + (archivo ? `\nArchivo: ${archivo}` : '') + (it.texto ? `\n\n${it.texto}` : '') + '\n');
     }
-    const meta = {app: 'captura-actas', version: 2, titulo: r.titulo, tipo: r.tipo, proyecto: r.proyecto, lugar: r.lugar, fecha: new Date(r.fecha).toISOString(), fecha_local: fFecha(r.fecha),
+    const meta = {app: 'captura-actas', version: 3, ubicacion: r.ubicacion, minuta: r.minuta || preprocesar(r, items), titulo: r.titulo, tipo: r.tipo, proyecto: r.proyecto, lugar: r.lugar, fecha: new Date(r.fecha).toISOString(), fecha_local: fFecha(r.fecha),
       asistentes: asistList(r), elementos};
     f.file('reunion.json', JSON.stringify(meta, null, 2));
-    f.file('contenido.md', `# ${r.titulo}\n\n- Tipo: ${r.tipo}\n- Proyecto: ${r.proyecto || '—'}\n- Lugar: ${r.lugar || '—'}\n- Fecha: ${fFecha(r.fecha)}\n\n## Asistentes\n${meta.asistentes.map(a => '- ' + a).join('\n') || '—'}\n\n## Registro en orden de captura\n\n${lineas.join('\n')}`);
+    f.file('contenido.md', `# ${r.titulo}\n\n- Tipo: ${r.tipo}\n- Proyecto: ${r.proyecto || '—'}\n- Lugar: ${r.lugar || '—'}${r.ubicacion ? `\n- Ubicación GPS: ${r.ubicacion.direccion ? r.ubicacion.direccion + ' · ' : ''}${r.ubicacion.lat}, ${r.ubicacion.lon} (±${r.ubicacion.precision} m) https://www.google.com/maps?q=${r.ubicacion.lat},${r.ubicacion.lon}` : ''}\n- Fecha: ${fFecha(r.fecha)}\n\n## Asistentes\n${meta.asistentes.map(a => '- ' + a).join('\n') || '—'}\n\n## Registro en orden de captura\n\n${lineas.join('\n')}`);
     const blob = await zip.generateAsync({type: 'blob', compression: 'STORE'});
     const file = new File([blob], carpeta + '.zip', {type: 'application/zip'});
     let shared = false;
@@ -503,7 +654,7 @@ $('#in-import').addEventListener('change', async e => {
     const jf = Object.keys(zip.files).find(n => n.endsWith('reunion.json')); if (!jf) throw new Error('el archivo no tiene reunion.json');
     const base = jf.slice(0, -'reunion.json'.length), meta = JSON.parse(await zip.file(jf).async('string'));
     const r = {id: uid(), creada: Date.now(), titulo: meta.titulo || 'Reunión importada', tipo: meta.tipo || TIPOS[0], fecha: new Date(meta.fecha).getTime() || Date.now(),
-      proyecto: meta.proyecto || '', lugar: meta.lugar || '', asistentes: (meta.asistentes || []).join('\n'), importada: Date.now()};
+      proyecto: meta.proyecto || '', lugar: meta.lugar || '', ubicacion: meta.ubicacion || undefined, asistentes: (meta.asistentes || []).join('\n'), importada: Date.now()};
     for (const el of meta.elementos || []){
       const it = {id: uid(), rid: r.id, segmentos: el.segmentos, compromisos: el.compromisos, tipo: el.tipo === 'nota_de_voz' ? 'audio' : el.tipo, notaVoz: el.tipo === 'nota_de_voz' || undefined, creado: new Date(el.momento).getTime() || Date.now(), titulo: el.titulo || '', texto: el.texto || '', dur: el.duracion_s || undefined};
       if (el.archivo && zip.file(base + el.archivo)){ const mime = el.mime || Object.keys(EXT).find(k => EXT[k] === el.archivo.split('.').pop()) || 'application/octet-stream'; it.blob = new Blob([await zip.file(base + el.archivo).async('arraybuffer')], {type: mime}); it.mime = mime; it.nombre = el.archivo.split('/').pop(); }
@@ -553,7 +704,8 @@ async function redactarIA(){
       if (!el.foto) delete el.foto;
       elementos.push(el);
     }
-    const pkg = {app: 'captura-actas', version: 2, reunion: {titulo: r.titulo, tipo: r.tipo, proyecto: r.proyecto, lugar: r.lugar, fecha: new Date(r.fecha).toISOString(), asistentes: asistList(r)}, elementos};
+    if (!r.minuta || (r.minuta.nItems !== S.items.length && !r.minuta.editada)){ r.minuta = preprocesar(r, S.items); await idb.put('reuniones', r); }
+    const pkg = {app: 'captura-actas', version: 3, minuta: r.minuta, reunion: {titulo: r.titulo, tipo: r.tipo, proyecto: r.proyecto, lugar: r.lugar, ubicacion: r.ubicacion, fecha: new Date(r.fecha).toISOString(), asistentes: asistList(r)}, elementos};
     const file = new File([JSON.stringify(pkg)], nombreBase(r) + '.json', {type: 'application/json'});
     descargar(file);
     delete r.pendienteIA; r.enviadaIA = Date.now(); await idb.put('reuniones', r); await loadReuniones(); S.cur = S.reuniones.find(x => x.id === r.id); renderMeeting(); updateNet();
@@ -578,7 +730,7 @@ $('#banner-btn').onclick = async () => {
   if (!S.cur || S.cur.id !== r.id) await openMeeting(r.id);
   redactarIA();
 };
-window.addEventListener('online', () => { updateNet(); if (S.reuniones.some(r => r.pendienteIA)){ toast('Volvió la señal. Toca «Redactar ahora» para lo que quedó en cola.'); navigator.vibrate?.(200); } });
+window.addEventListener('online', () => { updateNet(); S.reuniones.filter(r => r.ubicacion && !r.ubicacion.direccion).forEach(direccion); if (S.reuniones.some(r => r.pendienteIA)){ toast('Volvió la señal. Toca «Redactar ahora» para lo que quedó en cola.'); navigator.vibrate?.(200); } });
 window.addEventListener('offline', () => { updateNet(); if (dict){ const c = dCtx; stopDictado(); if (!c || !c.soloTexto) startNotaVoz(); } });
 
 /* ---------- instalar como app ---------- */
