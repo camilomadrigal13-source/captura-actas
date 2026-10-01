@@ -408,7 +408,8 @@ function parecido(a, b){ const A = palabras(a), B = palabras(b); if (!A.size || 
 
 function preprocesar(r, items){
   const nombres = nombresCortos();
-  const frases = [], correcciones = [], porConfirmar = [], datos = [], fotos = [];
+  const frases = [], correcciones = [], porConfirmar = [], datos = [], fotos = [], sinProcesar = [];
+  const crudo = f => sinProcesar.push({hora: f.hora, h: f.h, texto: f.orig});
   // 1) fuentes → frases limpias, en orden de captura, con hablante y hora
   for (const it of items){
     const hora = fHora(it.creado);
@@ -416,7 +417,7 @@ function preprocesar(r, items){
     const segs = it.tipo === 'transcripcion' ? (it.segmentos || []) : it.texto ? [{h: '', texto: it.texto}] : [];
     if (it.tipo === 'audio' && !it.texto){ porConfirmar.push({texto: `${it.notaVoz ? 'Nota de voz' : 'Grabación'} de las ${hora} sin transcribir`, motivo: 'Revisar el audio'}); continue; }
     for (const sg of segs) for (const raw of String(sg.texto).split(/(?<=[.;!?])\s+/)){
-      const t = limpiar(raw); if (t.length < 3) continue;
+      const t = limpiar(raw); if (!raw.trim()) continue;
       frases.push({hora, h: sg.h || '', texto: t, orig: raw.trim(), fuente: it.tipo});
     }
   }
@@ -424,7 +425,8 @@ function preprocesar(r, items){
   const vivas = [];
   for (const f of frases){
     const corr = f.texto.match(RE_CORR) || f.texto.match(RE_NOMEJOR);
-    if (corr && vivas.length){
+    if (corr && !vivas.length){ f.crudo = true; vivas.push(f); continue; }
+    if (corr){
       const prev = [...vivas].reverse().find(p => p.h === f.h) || vivas[vivas.length - 1];
       const nuevo = f.texto.slice(corr[0].length); f.texto = nuevo.charAt(0).toUpperCase() + nuevo.slice(1);
       prev.superada = true; f.tema = prev.tema;
@@ -437,10 +439,13 @@ function preprocesar(r, items){
       // si la corrección es solo un dato suelto («el lunes», «Pedro»), se arma la frase final sobre la anterior
       if (f.texto.split(/\s+/).length <= 4){ const fe = f.texto.match(FECHA); f.texto = fe && prev.texto.match(FECHA) ? prev.texto.replace(prev.texto.match(FECHA)[1], fe[1]) : prev.texto + ' (corregido: ' + f.texto + ')'; }
     }
-    f.tema = f.tema || temaDe(f.texto) || (vivas.length ? vivas[vivas.length - 1].tema : null);
+    f.tema = f.tema || temaDe(f.texto);
     vivas.push(f);
   }
-  const finales = vivas.filter(f => !f.superada && (f.heredados || f.texto.split(/\s+/).length >= 3));
+  // lo que no se puede interpretar con seguridad va TAL CUAL (texto original, sin limpiar)
+  const entiende = f => !f.crudo && (f.heredados || f.tema || RE_CANCEL.test(f.texto) || detectarCompromisos([{h: f.h, texto: f.texto}], nombres).length || RE_DATOS.some(([, re]) => new RegExp(re.source, 'i').test(f.texto)));
+  const finales = [];
+  for (const f of vivas){ if (f.superada) continue; if (entiende(f)) finales.push(f); else crudo(f); }
   for (const f of finales){
     if (RE_DUDA.test(f.texto) || /\?$/.test(f.texto)) porConfirmar.push({texto: f.texto, motivo: 'Se dijo con duda', hora: f.hora, h: f.h});
     for (const [tipo, re] of RE_DATOS) for (const m of f.texto.matchAll(re)) datos.push({tipo, valor: m[0].trim(), contexto: f.texto, hora: f.hora});
@@ -452,7 +457,7 @@ function preprocesar(r, items){
     if (RE_CANCEL.test(f.texto)){
       const c = comp.filter(x => !x.cancelado).map(x => [x, parecido(x.actividad, f.texto)]).sort((a, b) => b[1] - a[1])[0];
       if (c && c[1] >= .34){ c[0].cancelado = true; correcciones.push({hora: f.hora, h: f.h, antes: c[0].actividad, despues: 'Cancelado: ' + f.texto}); }
-      else correcciones.push({hora: f.hora, h: f.h, antes: '', despues: 'Cancelación mencionada: ' + f.texto});
+      else crudo(f);
       continue;
     }
     for (const c of [...detectarCompromisos([{h: f.h, texto: f.texto}], nombres), ...(f.heredados || [])]){
@@ -465,9 +470,9 @@ function preprocesar(r, items){
   comp.forEach(c => { if (!c.responsable) porConfirmar.push({texto: c.actividad, motivo: 'Compromiso sin responsable'}); if (!c.fecha) porConfirmar.push({texto: c.actividad, motivo: 'Compromiso sin fecha'}); });
   // 4) por tema, en el orden en que se trataron
   const temas = [];
-  for (const f of finales){ const k = f.tema || 'Otros temas'; let t = temas.find(x => x.tema === k); if (!t) temas.push(t = {tema: k, entradas: []}); t.entradas.push({hora: f.hora, h: f.h, texto: f.texto}); }
+  for (const f of finales){ if (RE_CANCEL.test(f.texto)) continue; const k = f.tema || 'Varios'; let t = temas.find(x => x.tema === k); if (!t) temas.push(t = {tema: k, entradas: []}); t.entradas.push({hora: f.hora, h: f.h, texto: f.texto}); }
   const vistos = new Set();
-  return {generada: Date.now(), nItems: items.length, temas, compromisos: comp, correcciones, datos: datos.filter(d => { const k = d.tipo + d.valor; if (vistos.has(k)) return false; vistos.add(k); return true; }), por_confirmar: porConfirmar, fotos};
+  return {generada: Date.now(), nItems: items.length, temas, compromisos: comp, correcciones, datos: datos.filter(d => { const k = d.tipo + d.valor; if (vistos.has(k)) return false; vistos.add(k); return true; }), por_confirmar: porConfirmar, sin_procesar: sinProcesar, fotos};
 }
 
 /* minuta: revisar y descartar antes de enviar */
@@ -486,6 +491,7 @@ function renderMinuta(){
     sec('Correcciones aplicadas', m.correcciones.length, m.correcciones.map((c, i) => `<div class="mrow"><div><span class="small">${esc(c.hora)}${c.h ? ' · ' + esc(c.h) : ''}</span>${c.antes ? `<div><s>${esc(c.antes)}</s></div>` : ''}<div>→ ${esc(c.despues)}</div></div>${x('correcciones', i)}</div>`).join('') || '<p class="small">Ninguna.</p>') +
     sec('Por confirmar', m.por_confirmar.length, m.por_confirmar.map((c, i) => `<div class="mrow"><div><b class="small">${esc(c.motivo)}</b><div>${esc(c.texto)}</div></div>${x('por_confirmar', i)}</div>`).join('') || '<p class="small">Nada.</p>') +
     sec('Datos clave', m.datos.length, m.datos.map((d, i) => `<div class="mrow"><div><span class="chip">${esc(d.tipo)}</span> <b>${esc(d.valor)}</b><div class="small">${esc(d.contexto)}</div></div>${x('datos', i)}</div>`).join('') || '<p class="small">Ninguno.</p>') +
+    ((m.sin_procesar || []).length ? sec('Sin procesar · va tal cual a Claude', m.sin_procesar.length, '<p class="small">El celular no pudo interpretar estas frases con seguridad. No se cambian ni se descartan: Claude las recibe exactamente así.</p>' + m.sin_procesar.map(c => `<div class="mrow"><div><span class="small">${esc(c.hora)}${c.h ? ' · ' + esc(c.h) : ''}</span><div>«${esc(c.texto)}»</div></div></div>`).join('')) : '') +
     m.temas.map((t, ti) => sec(esc(t.tema), t.entradas.length, t.entradas.map((e, i) => `<div class="mrow"><div><span class="small">${esc(e.hora)}${e.h ? ' · ' + esc(e.h) : ''}</span><div>${esc(e.texto)}</div></div><button class="x" data-mt="${ti}" data-i="${i}" aria-label="Descartar">✕</button></div>`).join(''))).join('') +
     (m.fotos.length ? sec('Fotos por tema', m.fotos.length, m.fotos.map(f => `<div class="mrow"><div><b>${esc(f.titulo)}</b> <span class="chip">${esc(f.tema || 'Otros temas')}</span></div></div>`).join('')) : '');
 }
